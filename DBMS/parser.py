@@ -1,7 +1,8 @@
 import re
-from database_manager import create_database, create_table, insert_into_table, show_table, update_table
+from database_manager import *
 
 current_db = None  # Track active database
+
 
 def parse_command(command):
     global current_db
@@ -12,6 +13,12 @@ def parse_command(command):
         db_name = match.group(1)
         create_database(db_name)
         current_db = db_name
+
+    elif match := re.match(r"DROP DATABASE (\w+)", command, re.IGNORECASE):
+        db_name = match.group(1)
+        drop_database(db_name)
+        if current_db == db_name:
+            current_db = None
 
     elif match := re.match(r"USE DATABASE (\w+)", command, re.IGNORECASE):
         db_name = match.group(1)
@@ -26,6 +33,14 @@ def parse_command(command):
         table_name = match.group(1)
         columns = [col.strip() for col in match.group(2).split(",")]
         create_table(current_db, table_name, columns)
+
+    elif match := re.match(r"DROP TABLE (\w+)", command, re.IGNORECASE):
+        if not current_db:
+            print("Error: No database selected. Use 'USE DATABASE db_name'.")
+            return
+
+        table_name = match.group(1)
+        drop_table(current_db, table_name)
 
     elif match := re.match(r"INSERT INTO (\w+) VALUES \((.+)\)", command, re.IGNORECASE):
         if not current_db:
@@ -55,6 +70,16 @@ def parse_command(command):
         condition_column = match.group(4)
         condition_value = match.group(5).strip()
         update_table(current_db, table_name, column, new_value, condition_column, condition_value)
+
+    elif match := re.match(r"DELETE FROM (\w+) WHERE (\w+) = (.+)", command, re.IGNORECASE):
+        if not current_db:
+            print("Error: No database selected. Use 'USE DATABASE db_name'.")
+            return
+
+        table_name = match.group(1)
+        condition_column = match.group(2)
+        condition_value = match.group(3).strip()
+        delete_from_table(current_db, table_name, condition_column, condition_value)
 
     else:
         print("Invalid command.")
