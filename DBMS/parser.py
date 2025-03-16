@@ -45,15 +45,38 @@ def parse_command(command, transaction_manager, txn_id):
 
         table_name = match.group(1)
         drop_table(current_db, table_name)
-
+    
     elif match := re.match(r"INSERT INTO (\w+) VALUES \((.+)\)", command, re.IGNORECASE):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
             return txn_id
-
+    
         table_name = match.group(1)
         values = [v.strip() for v in match.group(2).split(",")]
+    
+        # Find the highest existing ID across all index files
+        highest_id = 0
+        index_num = 1
+    
+        while True:
+            index_file = f"databases/{current_db}/tables/{table_name}/index_{index_num}.csv"
+            try:
+                with open(index_file, "r") as file:
+                    for line in file:
+                        row = line.strip().split(",")
+                        if row and row[0].isdigit():  # Ensure it's a valid ID
+                            highest_id = max(highest_id, int(row[0]))
+            except FileNotFoundError:
+                break  # Stop when there's no more index files
+            
+            index_num += 1
+    
+        # Assign new ID as highest_id + 1
+        new_id = highest_id + 1
+        values.insert(0, str(new_id))  # Insert the ID at the beginning
+    
         insert_into_table(current_db, table_name, values)
+    
 
     elif match := re.match(r"SHOW TABLE (\w+)", command, re.IGNORECASE):
         if not current_db:
@@ -83,7 +106,16 @@ def parse_command(command, transaction_manager, txn_id):
         table_name = match.group(1)
         condition_column = match.group(2)
         condition_value = match.group(3).strip()
-        delete_from_table(current_db, table_name, condition_column, condition_value)
+
+        # Call delete function and get the deleted ID
+        deleted_id = delete_from_table(current_db, table_name, condition_column, condition_value)
+
+        if deleted_id is not None:
+            # Save the deleted ID in a file (append mode)
+            with open(f"databases/{current_db}/tables/{table_name}/deleted_ids.txt", "a") as file:
+                file.write(str(deleted_id) + "\n")
+
+            print(f"Deleted row with ID {deleted_id}, saved to deleted_ids.txt")
 
     # Transaction-related commands
     elif match := re.match(r"START TRANSACTION FROM (\w+) (\w+) WHERE (\w+) = (\d+)", command, re.IGNORECASE):
