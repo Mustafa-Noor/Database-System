@@ -230,3 +230,45 @@ def delete_from_table(db_name, table_name, condition_column, condition_value):
         print(f"Records deleted successfully from '{table_name}'.")
     else:
         print(f"No matching records found in '{table_name}'.")
+
+
+
+def get_value_from_db(db_name, table_name, value_column, condition_column, condition_value):
+    """Fetches a value from the database based on a condition."""
+    table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
+
+    if not os.path.exists(table_path):
+        print(f"Error: Table '{table_name}' does not exist in database '{db_name}'.")
+        return None
+
+    index_files = sorted([f for f in os.listdir(table_path) if f.startswith("index_")])
+
+    if not index_files:
+        print(f"Error: Table '{table_name}' is empty.")
+        return None
+
+    for index_file in index_files:
+        file_path = os.path.join(table_path, index_file)
+
+        with open(file_path, "r") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+
+        if len(rows) < 2:
+            continue  # Skip empty files
+
+        headers = rows[0]
+
+        if value_column not in headers or condition_column not in headers:
+            print(f"Error: Column '{value_column}' or '{condition_column}' not found in '{table_name}'.")
+            return None
+
+        value_index = headers.index(value_column)
+        condition_index = headers.index(condition_column)
+
+        for row in rows[1:]:  # Skip the header row
+            if row[condition_index] == condition_value:
+                return row[value_index]  # Return the matching value
+
+    print(f"Error: No matching record found for '{condition_column} = {condition_value}' in '{table_name}'.")
+    return None
