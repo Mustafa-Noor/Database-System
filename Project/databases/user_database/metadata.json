@@ -1,0 +1,11 @@
+{
+    "tables": [
+        "users"
+    ],
+    "indexes": {
+        "users": [
+            "username",
+            "password"
+        ]
+    }
+}
