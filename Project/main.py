@@ -9,6 +9,21 @@ from database_manager import *
 active_user = None
 current_txn_id = None  # Track the active transaction ID
 
+# def setup_environment():
+#     """Sets up the initial environment for the user database."""
+#     db_name = "user_database"
+#     table_name = "users"
+#     columns = ["username", "password"]
+
+#     # Check if the database directory exists
+#     db_path = os.path.join("databases", db_name)
+#     if not os.path.exists(db_path):
+#         os.makedirs(db_path)
+#         print(f"Database '{db_name}' created.")
+
+#     # Create the users table
+#     create_table(db_name, table_name, columns)
+#     print(f"Table '{table_name}' created in database '{db_name}'.")
 
 def print_header():
     """Prints a welcome header."""
@@ -50,6 +65,7 @@ def main():
     """Handles database operations after user signs in."""
     global active_user
     
+
 
     while True:
         command = input("> ").strip()

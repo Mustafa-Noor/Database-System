@@ -1,0 +1,12 @@
+{
+    "columns": [
+        "username",
+        "password"
+    ],
+    "page_size": 4096,
+    "indexes": {
+        "username": "username_index.btree",
+        "password": "password_index.btree"
+    },
+    "pages": 1
+}
