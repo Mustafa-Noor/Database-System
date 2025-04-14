@@ -1,12 +1,10 @@
 import re
-import uuid
 from database_manager import *
-# from transaction_manager import *
 
 current_db = None  # Tracks the currently active database
 
-def parse_command(command, transaction_manager, txn_id):
-    """Parses and executes user commands related to database operations and transactions."""
+def parse_command(command):
+    """Parses and executes user commands related to database operations."""
     global current_db
 
     command = command.strip()
@@ -32,7 +30,7 @@ def parse_command(command, transaction_manager, txn_id):
     elif match := re.match(r"CREATE TABLE (\w+) \((.+)\)", command, re.IGNORECASE):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
-            return txn_id
+            return
         
         table_name = match.group(1)
         columns = [col.strip() for col in match.group(2).split(",")]
@@ -41,7 +39,7 @@ def parse_command(command, transaction_manager, txn_id):
     elif match := re.match(r"DROP TABLE (\w+)", command, re.IGNORECASE):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
-            return txn_id
+            return
 
         table_name = match.group(1)
         drop_table(current_db, table_name)
@@ -49,7 +47,7 @@ def parse_command(command, transaction_manager, txn_id):
     elif match := re.match(r"INSERT INTO (\w+) VALUES \((.+)\)", command, re.IGNORECASE):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
-            return txn_id
+            return
 
         table_name = match.group(1)
         values = [v.strip() for v in match.group(2).split(",")]
@@ -58,7 +56,7 @@ def parse_command(command, transaction_manager, txn_id):
     elif match := re.match(r"SHOW TABLE (\w+)", command, re.IGNORECASE):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
-            return txn_id
+            return
 
         table_name = match.group(1)
         show_table(current_db, table_name)
@@ -66,7 +64,7 @@ def parse_command(command, transaction_manager, txn_id):
     elif match := re.match(r"UPDATE (\w+) SET (\w+) = (.+) WHERE (\w+) = (.+)", command, re.IGNORECASE):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
-            return txn_id
+            return
 
         table_name = match.group(1)
         column = match.group(2)
@@ -78,12 +76,15 @@ def parse_command(command, transaction_manager, txn_id):
     elif match := re.match(r"DELETE FROM (\w+) WHERE (\w+) = (.+)", command, re.IGNORECASE):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
-            return txn_id
+            return
 
         table_name = match.group(1)
         condition_column = match.group(2)
         condition_value = match.group(3).strip()
         delete_from_table(current_db, table_name, condition_column, condition_value)
+
+    else:
+        print("Invalid command.")
 
     # # Transaction-related commands
     # elif match := re.match(r"START TRANSACTION FROM (\w+) (\w+) WHERE (\w+) = (\d+)", command, re.IGNORECASE):
@@ -121,7 +122,7 @@ def parse_command(command, transaction_manager, txn_id):
     #     else:
     #         print("< Error: No active transaction to rollback. >")
 
-    else:
-        print("Invalid command.")
+    # else:
+    #     print("Invalid command.")
 
-    return txn_id  # Return the current transaction ID
+    # return txn_id  # Return the current transaction ID

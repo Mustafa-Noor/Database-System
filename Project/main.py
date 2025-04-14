@@ -9,19 +9,6 @@ from database_manager import *
 active_user = None
 current_txn_id = None  # Track the active transaction ID
 
-# Define database and table details
-DATABASE_NAME = "user_database"
-TABLE_NAME = "users"
-COLUMNS = ["username", "password"]  # Columns for the users table
-
-# Create the database
-create_database(DATABASE_NAME)
-
-# Create the users table
-create_table(DATABASE_NAME, TABLE_NAME, COLUMNS)
-
-print(f"Users table created successfully in the '{DATABASE_NAME}' database.")
-
 
 def print_header():
     """Prints a welcome header."""
@@ -50,9 +37,7 @@ def start_menu():
             if sign_in(username, password):
                 print(f"\nWelcome back, {username}!")
                 active_user = username  # Set active user
-                # active_user = username  # Set active user
-                # transaction_manager = get_transaction_manager(username)  # Get user-specific transaction manager
-                # main(transaction_manager)  # Pass the transaction manager
+                main()  # Start the main loop for commands
 
         elif choice == "3":
             print("\n< Goodbye! Thanks for using La Vida Database. >")
@@ -61,21 +46,19 @@ def start_menu():
         else:
             print("\n< Invalid choice, please try again! >")
 
-def main(transaction_manager):
-    """Handles database and transaction operations."""
-    global current_txn_id
-    clear_screen()
+def main():
+    """Handles database operations after user signs in."""
+    global active_user
+    
 
     while True:
-        prompt = "🔹 " if current_txn_id else "> "
-        command = input(prompt).strip()
+        command = input("> ").strip()
 
         if command.upper() == "EXIT":
             print("\nExiting the system. Goodbye!")
             break
-        
-        # Pass the transaction manager and current transaction ID
-        current_txn_id = parse_command(command, transaction_manager, current_txn_id)
+
+        parse_command(command)
 
 if __name__ == "__main__":
     start_menu()
