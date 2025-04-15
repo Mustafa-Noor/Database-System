@@ -1,0 +1,14 @@
+{
+    "columns": [
+        "colour",
+        "size",
+        "type"
+    ],
+    "page_size": 4096,
+    "indexes": {
+        "colour": "colour_index.btree",
+        "size": "size_index.btree",
+        "type": "type_index.btree"
+    },
+    "pages": 1
+}

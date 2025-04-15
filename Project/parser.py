@@ -9,7 +9,7 @@ def parse_command(command):
 
     command = command.strip()
 
-    # Database commands
+    # Database management commands
     if match := re.match(r"CREATE DATABASE (\w+)", command, re.IGNORECASE):
         db_name = match.group(1)
         create_database(db_name)
@@ -26,7 +26,10 @@ def parse_command(command):
         current_db = db_name
         print(f"Switched to database '{db_name}'.")
 
-    # Table commands
+    elif command.upper() == "SHOW DATABASES":
+        list_databases()
+
+    # Table management commands
     elif match := re.match(r"CREATE TABLE (\w+) \((.+)\)", command, re.IGNORECASE):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
@@ -44,13 +47,36 @@ def parse_command(command):
         table_name = match.group(1)
         drop_table(current_db, table_name)
 
+    elif command.upper() == "SHOW TABLES":
+        if not current_db:
+            print("Error: No database selected. Use 'USE DATABASE db_name'.")
+            return
+        list_tables(current_db)
+
+    elif match := re.match(r"DESCRIBE TABLE (\w+)", command, re.IGNORECASE):
+        if not current_db:
+            print("Error: No database selected. Use 'USE DATABASE db_name'.")
+            return
+        
+        table_name = match.group(1)
+        describe_table(current_db, table_name)
+
+    elif match := re.match(r"TRUNCATE TABLE (\w+)", command, re.IGNORECASE):
+        if not current_db:
+            print("Error: No database selected. Use 'USE DATABASE db_name'.")
+            return
+        
+        table_name = match.group(1)
+        truncate_table(current_db, table_name)
+
+    # Data manipulation commands
     elif match := re.match(r"INSERT INTO (\w+) VALUES \((.+)\)", command, re.IGNORECASE):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
             return
 
         table_name = match.group(1)
-        values = [v.strip() for v in match.group(2).split(",")]
+        values = [v.strip().strip("'\"") for v in match.group(2).split(",")]
         insert_into_table(current_db, table_name, values)
 
     elif match := re.match(r"SHOW TABLE (\w+)", command, re.IGNORECASE):
@@ -61,6 +87,25 @@ def parse_command(command):
         table_name = match.group(1)
         show_table(current_db, table_name)
 
+    elif match := re.match(r"SELECT \* FROM (\w+)", command, re.IGNORECASE):
+        if not current_db:
+            print("Error: No database selected. Use 'USE DATABASE db_name'.")
+            return
+
+        table_name = match.group(1)
+        show_table(current_db, table_name)
+
+    elif match := re.match(r"SELECT (\w+) FROM (\w+) WHERE (\w+) = (.+)", command, re.IGNORECASE):
+        if not current_db:
+            print("Error: No database selected. Use 'USE DATABASE db_name'.")
+            return
+
+        column = match.group(1)
+        table_name = match.group(2)
+        condition_column = match.group(3)
+        condition_value = match.group(4).strip().strip("'\"")
+        search_in_table(current_db, table_name, condition_column, condition_value)
+
     elif match := re.match(r"UPDATE (\w+) SET (\w+) = (.+) WHERE (\w+) = (.+)", command, re.IGNORECASE):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
@@ -68,9 +113,9 @@ def parse_command(command):
 
         table_name = match.group(1)
         column = match.group(2)
-        new_value = match.group(3).strip()
+        new_value = match.group(3).strip().strip("'\"")
         condition_column = match.group(4)
-        condition_value = match.group(5).strip()
+        condition_value = match.group(5).strip().strip("'\"")
         update_table(current_db, table_name, column, new_value, condition_column, condition_value)
 
     elif match := re.match(r"DELETE FROM (\w+) WHERE (\w+) = (.+)", command, re.IGNORECASE):
@@ -80,11 +125,44 @@ def parse_command(command):
 
         table_name = match.group(1)
         condition_column = match.group(2)
-        condition_value = match.group(3).strip()
+        condition_value = match.group(3).strip().strip("'\"")
         delete_from_table(current_db, table_name, condition_column, condition_value)
 
     else:
-        print("Invalid command.")
+        print("Invalid command. Available commands:")
+        print_help()
+
+def print_help():
+    """Print available commands and their syntax."""
+    commands = {
+        "Database Management": [
+            "CREATE DATABASE <name>",
+            "DROP DATABASE <name>",
+            "USE DATABASE <name>",
+            "SHOW DATABASES"
+        ],
+        "Table Management": [
+            "CREATE TABLE <name> (column1, column2, ...)",
+            "DROP TABLE <name>",
+            "SHOW TABLES",
+            "DESCRIBE TABLE <name>",
+            "TRUNCATE TABLE <name>"
+        ],
+        "Data Manipulation": [
+            "INSERT INTO <table> VALUES (value1, value2, ...)",
+            "SHOW TABLE <name>",
+            "SELECT * FROM <table>",
+            "SELECT <column> FROM <table> WHERE <column> = <value>",
+            "UPDATE <table> SET <column> = <value> WHERE <column> = <value>",
+            "DELETE FROM <table> WHERE <column> = <value>"
+        ]
+    }
+
+    print("\nAvailable Commands:")
+    for category, cmds in commands.items():
+        print(f"\n{category}:")
+        for cmd in cmds:
+            print(f"  {cmd}")
 
     # # Transaction-related commands
     # elif match := re.match(r"START TRANSACTION FROM (\w+) (\w+) WHERE (\w+) = (\d+)", command, re.IGNORECASE):
