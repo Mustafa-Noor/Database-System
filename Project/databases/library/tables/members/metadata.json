@@ -1,0 +1,14 @@
+{
+    "columns": [
+        "member_id",
+        "name",
+        "email"
+    ],
+    "page_size": 4096,
+    "indexes": {
+        "member_id": "member_id_index.btree",
+        "name": "name_index.btree",
+        "email": "email_index.btree"
+    },
+    "pages": 1
+}

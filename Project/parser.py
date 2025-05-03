@@ -21,7 +21,7 @@ def parse_command(command):
         if current_db == db_name:
             current_db = None
 
-    elif match := re.match(r"USE DATABASE (\w+)", command, re.IGNORECASE):
+    elif match := re.match(r"USE\s+(?:DATABASE\s+)?(\w+)", command, re.IGNORECASE):
         db_name = match.group(1)
         current_db = db_name
         print(f"Switched to database '{db_name}'.")
@@ -36,14 +36,56 @@ def parse_command(command):
             return
         
         table_name = match.group(1)
-        columns = [col.strip() for col in match.group(2).split(",")]
-        create_table(current_db, table_name, columns)
+        columns_def = [col.strip() for col in match.group(2).split(",")]
+        
+        # Parse columns and constraints
+        columns = []
+        primary_key = None
+        foreign_keys = []
+        unique_constraints = []
+        
+        for col_def in columns_def:
+            # Parse column definition
+            col_parts = col_def.split()
+            col_name = col_parts[0]
+            col_type = col_parts[1].upper()
+            
+            # Check for PRIMARY KEY
+            if "PRIMARY KEY" in col_def.upper():
+                primary_key = col_name
+                is_primary = True
+            else:
+                is_primary = False
+            
+            # Check for NOT NULL
+            is_nullable = "NOT NULL" not in col_def.upper()
+            
+            # Check for UNIQUE
+            is_unique = "UNIQUE" in col_def.upper()
+            if is_unique:
+                unique_constraints.append(col_name)
+            
+            # Check for DEFAULT
+            default_match = re.search(r"DEFAULT\s+(\w+)", col_def, re.IGNORECASE)
+            default = default_match.group(1) if default_match else None
+            
+            # Create column object
+            column = Column(col_name, col_type, is_primary, is_nullable, default, is_unique)
+            columns.append(column)
+            
+            # Check for FOREIGN KEY
+            fk_match = re.search(r"FOREIGN KEY\s*\((\w+)\)\s*REFERENCES\s+(\w+)\s*\((\w+)\)(?:\s+ON\s+DELETE\s+(\w+))?(?:\s+ON\s+UPDATE\s+(\w+))?", col_def, re.IGNORECASE)
+            if fk_match:
+                fk_col, ref_table, ref_col, on_delete, on_update = fk_match.groups()
+                fk = ForeignKey(fk_col, ref_table, ref_col, on_delete or "RESTRICT", on_update or "RESTRICT")
+                foreign_keys.append(fk)
+        
+        create_table(current_db, table_name, columns, primary_key, foreign_keys, unique_constraints)
 
     elif match := re.match(r"DROP TABLE (\w+)", command, re.IGNORECASE):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
             return
-
         table_name = match.group(1)
         drop_table(current_db, table_name)
 
@@ -51,86 +93,426 @@ def parse_command(command):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
             return
-        list_tables(current_db)
+        show_tables(current_db)
 
     elif match := re.match(r"DESCRIBE TABLE (\w+)", command, re.IGNORECASE):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
             return
-        
         table_name = match.group(1)
         describe_table(current_db, table_name)
-
-    elif match := re.match(r"TRUNCATE TABLE (\w+)", command, re.IGNORECASE):
-        if not current_db:
-            print("Error: No database selected. Use 'USE DATABASE db_name'.")
-            return
-        
-        table_name = match.group(1)
-        truncate_table(current_db, table_name)
 
     # Data manipulation commands
     elif match := re.match(r"INSERT INTO (\w+) VALUES \((.+)\)", command, re.IGNORECASE):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
             return
-
         table_name = match.group(1)
         values = [v.strip().strip("'\"") for v in match.group(2).split(",")]
         insert_into_table(current_db, table_name, values)
 
-    elif match := re.match(r"SHOW TABLE (\w+)", command, re.IGNORECASE):
+    # Enhanced SELECT query support
+    elif match := re.match(
+        r"SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(.+?))?(?:\s+LIMIT\s+(\d+))?(?:\s+OFFSET\s+(\d+))?$", 
+        command, re.IGNORECASE
+    ):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
             return
-
-        table_name = match.group(1)
-        show_table(current_db, table_name)
-
-    elif match := re.match(r"SELECT \* FROM (\w+)", command, re.IGNORECASE):
-        if not current_db:
-            print("Error: No database selected. Use 'USE DATABASE db_name'.")
-            return
-
-        table_name = match.group(1)
-        show_table(current_db, table_name)
-
-    elif match := re.match(r"SELECT (\w+) FROM (\w+) WHERE (\w+) = (.+)", command, re.IGNORECASE):
-        if not current_db:
-            print("Error: No database selected. Use 'USE DATABASE db_name'.")
-            return
-
-        column = match.group(1)
+        
+        select_columns = [col.strip() for col in match.group(1).split(",")]
         table_name = match.group(2)
-        condition_column = match.group(3)
-        condition_value = match.group(4).strip().strip("'\"")
-        search_in_table(current_db, table_name, condition_column, condition_value)
+        where_clause = match.group(3)
+        order_by = match.group(4)
+        limit = int(match.group(5)) if match.group(5) else None
+        offset = int(match.group(6)) if match.group(6) else 0
+        
+        # Get all columns from the table for WHERE and ORDER BY
+        db = Database(current_db)
+        if table_name not in db.tables:
+            print(f"Error: Table '{table_name}' does not exist.")
+            return
+        
+        table = db.tables[table_name]
+        all_columns = [col.name for col in table.columns]
+        
+        # Handle SELECT *
+        if select_columns == ["*"]:
+            select_columns = all_columns
+        
+        # Parse WHERE clause if present
+        where_func = None
+        if where_clause:
+            where_func = parse_where_clause(where_clause, all_columns)
+        
+        # Parse ORDER BY clause if present
+        order_by_func = None
+        if order_by:
+            order_by_func = parse_order_by_clause(order_by, all_columns)
+        
+        results = select_from_table(
+            current_db, 
+            table_name, 
+            select_columns, 
+            where_func, 
+            order_by_func,
+            limit,
+            offset
+        )
+        
+        print_results(results, select_columns)
 
-    elif match := re.match(r"UPDATE (\w+) SET (\w+) = (.+) WHERE (\w+) = (.+)", command, re.IGNORECASE):
+    # Simple SELECT query support (for basic SELECT * FROM table)
+    elif match := re.match(r"SELECT\s+\*\s+FROM\s+(\w+)", command, re.IGNORECASE):
+        print("Matched simple SELECT * query")  # Debug print
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
             return
-
+        
         table_name = match.group(1)
-        column = match.group(2)
-        new_value = match.group(3).strip().strip("'\"")
-        condition_column = match.group(4)
-        condition_value = match.group(5).strip().strip("'\"")
-        update_table(current_db, table_name, column, new_value, condition_column, condition_value)
+        print(f"Table name: {table_name}")  # Debug print
+        
+        # Get all columns from the table
+        db = Database(current_db)
+        if table_name not in db.tables:
+            print(f"Error: Table '{table_name}' does not exist.")
+            return
+        
+        table = db.tables[table_name]
+        all_columns = [col.name for col in table.columns]
+        print(f"Columns: {all_columns}")  # Debug print
+        
+        try:
+            results = select_from_table(
+                current_db,
+                table_name,
+                all_columns,
+                None,  # No WHERE clause
+                None,  # No ORDER BY
+                None,  # No LIMIT
+                0      # No OFFSET
+            )
+            print(f"Got results: {results}")  # Debug print
+            print_results(results, all_columns)
+        except Exception as e:
+            print(f"Error executing SELECT: {str(e)}")  # Debug print
 
-    elif match := re.match(r"DELETE FROM (\w+) WHERE (\w+) = (.+)", command, re.IGNORECASE):
+    elif match := re.match(
+        r"SELECT\s+(.+?)\s+FROM\s+(\w+)\s+(?:INNER|LEFT|RIGHT|FULL)?\s*JOIN\s+(\w+)\s+ON\s+(.+?)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(.+?))?(?:\s+LIMIT\s+(\d+))?(?:\s+OFFSET\s+(\d+))?$", 
+        command, re.IGNORECASE
+    ):
         if not current_db:
             print("Error: No database selected. Use 'USE DATABASE db_name'.")
             return
+        
+        select_columns = [col.strip() for col in match.group(1).split(",")]
+        left_table = match.group(2)
+        right_table = match.group(3)
+        join_condition = match.group(4)
+        where_clause = match.group(5)
+        order_by = match.group(6)
+        limit = int(match.group(7)) if match.group(7) else None
+        offset = int(match.group(8)) if match.group(8) else 0
+        
+        # Parse join condition
+        join_parts = join_condition.split("=")
+        left_col = join_parts[0].strip().split(".")[1]
+        right_col = join_parts[1].strip().split(".")[1]
+        
+        # Parse WHERE clause if present
+        where_func = None
+        if where_clause:
+            where_func = parse_where_clause(where_clause, select_columns)
+        
+        # Parse ORDER BY clause if present
+        order_by_func = None
+        if order_by:
+            order_by_func = parse_order_by_clause(order_by, select_columns)
+        
+        results = join_tables(
+            current_db,
+            left_table,
+            right_table,
+            left_col,
+            right_col,
+            select_columns,
+            where_func,
+            order_by_func,
+            limit,
+            offset
+        )
+        
+        print_results(results, select_columns)
 
+    elif match := re.match(
+        r"UPDATE\s+(\w+)\s+SET\s+(.+?)(?:\s+WHERE\s+(.+?))?(?:\s+RETURNING\s+(.+))?$", 
+        command, re.IGNORECASE
+    ):
+        if not current_db:
+            print("Error: No database selected. Use 'USE DATABASE db_name'.")
+            return
+        
         table_name = match.group(1)
-        condition_column = match.group(2)
-        condition_value = match.group(3).strip().strip("'\"")
-        delete_from_table(current_db, table_name, condition_column, condition_value)
+        set_clause = match.group(2)
+        where_clause = match.group(3)
+        returning_clause = match.group(4)
+        
+        # Parse SET clause
+        set_values = {}
+        for set_item in set_clause.split(","):
+            col_name, value = set_item.split("=")
+            set_values[col_name.strip()] = value.strip().strip("'\"")
+        
+        # Parse WHERE clause if present
+        where_func = None
+        if where_clause:
+            where_func = parse_where_clause(where_clause, [col for col in set_values.keys()])
+        
+        # Parse RETURNING clause if present
+        returning_columns = None
+        if returning_clause:
+            returning_columns = [col.strip() for col in returning_clause.split(",")]
+        
+        results = update_table(
+            current_db,
+            table_name,
+            set_values,
+            where_func,
+            returning_columns
+        )
+        
+        if returning_columns and results:
+            print_results(results, returning_columns)
+
+    elif match := re.match(
+        r"DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+RETURNING\s+(.+))?$", 
+        command, re.IGNORECASE
+    ):
+        if not current_db:
+            print("Error: No database selected. Use 'USE DATABASE db_name'.")
+            return
+        
+        table_name = match.group(1)
+        where_clause = match.group(2)
+        returning_clause = match.group(3)
+        
+        # Parse WHERE clause if present
+        where_func = None
+        if where_clause:
+            where_func = parse_where_clause(where_clause, ["*"])
+        
+        # Parse RETURNING clause if present
+        returning_columns = None
+        if returning_clause:
+            returning_columns = [col.strip() for col in returning_clause.split(",")]
+        
+        results = delete_from_table(
+            current_db,
+            table_name,
+            where_func,
+            returning_columns
+        )
+        
+        if returning_columns and results:
+            print_results(results, returning_columns)
+
+    elif command.upper() == "HELP":
+        print_help()
 
     else:
-        print("Invalid command. Available commands:")
-        print_help()
+        print("Invalid command. Type 'HELP' for available commands.")
+
+def parse_where_clause(where_clause, columns):
+    """Parse WHERE clause into a function that can be used to filter rows."""
+    # Split into conditions (handling AND/OR)
+    conditions = []
+    current_condition = []
+    
+    for token in where_clause.split():
+        if token.upper() in ("AND", "OR"):
+            if current_condition:
+                conditions.append((" ".join(current_condition), token.upper()))
+                current_condition = []
+        else:
+            current_condition.append(token)
+    
+    if current_condition:
+        conditions.append((" ".join(current_condition), None))
+    
+    def where_func(row):
+        result = None
+        for condition, operator in conditions:
+            # Parse condition
+            parts = condition.split()
+            col_name = parts[0]
+            op = parts[1].upper()
+            value = " ".join(parts[2:]).strip("'\"").lower() if len(parts) > 2 else None
+            
+            # Get column index
+            try:
+                col_idx = next(i for i, c in enumerate(columns) if c == col_name)
+            except StopIteration:
+                print(f"Error: Column '{col_name}' not found in table.")
+                return False
+            
+            # Compare values
+            row_value = row[col_idx]
+            
+            # Handle NULL values
+            if row_value is None:
+                if op == "IS NULL":
+                    condition_result = True
+                elif op == "IS NOT NULL":
+                    condition_result = False
+                else:
+                    condition_result = False
+            else:
+                row_value_str = str(row_value).lower()
+                if op == "=":
+                    condition_result = row_value_str == value
+                elif op == "!=":
+                    condition_result = row_value_str != value
+                elif op == ">":
+                    condition_result = str(row_value) > value
+                elif op == "<":
+                    condition_result = str(row_value) < value
+                elif op == ">=":
+                    condition_result = str(row_value) >= value
+                elif op == "<=":
+                    condition_result = str(row_value) <= value
+                elif op == "LIKE":
+                    # Convert SQL LIKE pattern to regex
+                    pattern = value.replace("%", ".*").replace("_", ".")
+                    condition_result = bool(re.match(f"^{pattern}$", row_value_str, re.IGNORECASE))
+                elif op == "IN":
+                    values = value.strip("()").split(",")
+                    condition_result = row_value_str in [v.strip("'\"").lower() for v in values]
+                else:
+                    print(f"Error: Unknown operator '{op}'")
+                    return False
+            
+            # Combine with previous result
+            if result is None:
+                result = condition_result
+            elif operator == "AND":
+                result = result and condition_result
+            elif operator == "OR":
+                result = result or condition_result
+        
+        return result
+    
+    return where_func
+
+def parse_order_by_clause(order_by, columns):
+    """Parse ORDER BY clause into a function that can be used to sort rows."""
+    order_parts = order_by.split()
+    col_name = order_parts[0]
+    direction = order_parts[1].upper() if len(order_parts) > 1 else "ASC"
+    
+    try:
+        col_idx = next(i for i, c in enumerate(columns) if c == col_name)
+    except StopIteration:
+        print(f"Error: Column '{col_name}' not found in table.")
+        return None
+    
+    def order_by_func(row):
+        return row[col_idx]
+    
+    return (order_by_func, direction == "DESC")
+
+def select_from_table(db_name, table_name, columns=None, where=None, order_by=None, limit=None, offset=0):
+    """Select rows from a table with optional filtering, ordering, and pagination."""
+    db = Database(db_name)
+    if table_name not in db.tables:
+        print(f"Error: Table '{table_name}' does not exist.")
+        return []
+
+    table = db.tables[table_name]
+    table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
+    data_file = os.path.join(table_path, "data.bin")
+
+    # Determine which columns to select
+    if columns is None or columns == ["*"]:
+        columns = [col.name for col in table.columns]
+    else:
+        # Validate column names
+        for col in columns:
+            if col not in [c.name for c in table.columns]:
+                print(f"Error: Column '{col}' does not exist.")
+                return []
+
+    # Read and filter rows
+    results = []
+    with open(data_file, "rb") as f:
+        while True:
+            try:
+                row = []
+                for col in table.columns:
+                    if col.data_type == "INTEGER":
+                        value = struct.unpack("i", f.read(4))[0]
+                    elif col.data_type == "FLOAT":
+                        value = struct.unpack("f", f.read(4))[0]
+                    elif col.data_type == "BOOLEAN":
+                        value = struct.unpack("?", f.read(1))[0]
+                    elif col.data_type == "DATE":
+                        date_str = f.read(10).decode()
+                        value = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str.strip() else None
+                    else:  # STRING
+                        value = f.read(20).decode().rstrip('\x00')
+                        value = None if not value.strip() else value
+                    row.append(value)
+
+                if not row:  # End of file
+                    break
+
+                # Apply WHERE clause if specified
+                if where is None or where(row):
+                    # Select only requested columns
+                    selected_row = []
+                    for col_name in columns:
+                        col_idx = next(i for i, c in enumerate(table.columns) if c.name == col_name)
+                        selected_row.append(row[col_idx])
+                    results.append(selected_row)
+
+            except (struct.error, ValueError, EOFError):
+                break
+
+    # Apply ORDER BY if specified
+    if order_by:
+        order_func, reverse = order_by
+        results.sort(key=order_func, reverse=reverse)
+
+    # Apply LIMIT and OFFSET
+    if limit is not None:
+        results = results[offset:offset + limit]
+    else:
+        results = results[offset:]
+
+    return results
+
+def print_results(results, columns):
+    """Print query results in a formatted table."""
+    if not results:
+        print("No rows found.")
+        return
+    
+    # Calculate column widths
+    col_widths = [max(len(str(col)), max(len(str(row[i])) for row in results)) for i, col in enumerate(columns)]
+    total_width = sum(col_widths) + 3 * (len(columns) - 1)
+    
+    # Print header
+    print("\nQuery Results:")
+    print("-" * total_width)
+    header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
+    print(header)
+    print("-" * total_width)
+    
+    # Print rows
+    for row in results:
+        print(" | ".join(str(val).ljust(width) for val, width in zip(row, col_widths)))
+    
+    print("-" * total_width)
+    print(f"Total rows: {len(results)}")
 
 def print_help():
     """Print available commands and their syntax."""
@@ -142,19 +524,17 @@ def print_help():
             "SHOW DATABASES"
         ],
         "Table Management": [
-            "CREATE TABLE <name> (column1, column2, ...)",
+            "CREATE TABLE <name> (col1 TYPE [PRIMARY KEY] [NOT NULL] [UNIQUE] [DEFAULT value], col2 TYPE [FOREIGN KEY REFERENCES table(col) [ON DELETE action] [ON UPDATE action]], ...)",
             "DROP TABLE <name>",
             "SHOW TABLES",
-            "DESCRIBE TABLE <name>",
-            "TRUNCATE TABLE <name>"
+            "DESCRIBE TABLE <name>"
         ],
         "Data Manipulation": [
             "INSERT INTO <table> VALUES (value1, value2, ...)",
-            "SHOW TABLE <name>",
-            "SELECT * FROM <table>",
-            "SELECT <column> FROM <table> WHERE <column> = <value>",
-            "UPDATE <table> SET <column> = <value> WHERE <column> = <value>",
-            "DELETE FROM <table> WHERE <column> = <value>"
+            "SELECT col1, col2, ... FROM <table> [WHERE condition] [ORDER BY col [ASC|DESC]] [LIMIT n] [OFFSET n]",
+            "SELECT col1, col2, ... FROM table1 [INNER|LEFT|RIGHT|FULL] JOIN table2 ON table1.col = table2.col [WHERE condition] [ORDER BY col [ASC|DESC]] [LIMIT n] [OFFSET n]",
+            "UPDATE <table> SET col1 = value1, col2 = value2, ... [WHERE condition] [RETURNING col1, col2, ...]",
+            "DELETE FROM <table> [WHERE condition] [RETURNING col1, col2, ...]"
         ]
     }
 
@@ -164,43 +544,64 @@ def print_help():
         for cmd in cmds:
             print(f"  {cmd}")
 
-    # # Transaction-related commands
-    # elif match := re.match(r"START TRANSACTION FROM (\w+) (\w+) WHERE (\w+) = (\d+)", command, re.IGNORECASE):
-    #     if not current_db:
-    #         print("< Error: No database selected. Use 'USE DATABASE db_name'. >")
-    #         return txn_id
+def drop_table(db_name, table_name):
+    """Drop a table from the database."""
+    db = Database(db_name)
+    if table_name not in db.tables:
+        print(f"Error: Table '{table_name}' does not exist.")
+        return False
 
-    #     table_name, value_column, condition_column, condition_value = match.groups()
-    #     txn_id = transaction_manager.start_transaction(current_db, table_name, condition_column, condition_value, value_column)
-    #     return txn_id  # Update the transaction ID
+    # Check for foreign key references
+    for other_table in db.tables.values():
+        for fk in other_table.foreign_keys:
+            if fk.ref_table == table_name:
+                print(f"Error: Cannot drop table '{table_name}' - referenced by '{other_table.name}'.")
+                return False
 
-    # elif re.match(r"^[+-]\d+$", command):  # Handles value modifications in transactions
-    #     if txn_id and transaction_manager.is_transaction_active(txn_id):
-    #         transaction_manager.modify_transaction(txn_id, int(command))
-    #     else:
-    #         print("< Error: No active transaction. Start a transaction first. >")
+    # Remove table from database
+    del db.tables[table_name]
+    db.save_metadata()
 
-    # elif command.upper() == "SHOW VALUE OF TRANSACTION":
-    #     if txn_id and transaction_manager.is_transaction_active(txn_id):
-    #         transaction_manager.show_transaction_value(txn_id)
-    #     else:
-    #         print("< Error: No active transaction. Start a transaction first. >")
+    # Remove table files
+    table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
+    if os.path.exists(table_path):
+        import shutil
+        shutil.rmtree(table_path)
 
-    # elif command.upper() == "COMMIT TRANSACTION":
-    #     if txn_id and transaction_manager.is_transaction_active(txn_id):
-    #         transaction_manager.commit_transaction(txn_id)
-    #         return None  # Reset txn_id after commit
-    #     else:
-    #         print("< Error: No active transaction to commit. >")
+    print(f"Table '{table_name}' dropped successfully.")
+    return True
 
-    # elif command.upper() == "ROLLBACK TRANSACTION":
-    #     if txn_id and transaction_manager.is_transaction_active(txn_id):
-    #         transaction_manager.rollback_transaction(txn_id)
-    #         return None  # Reset txn_id after rollback
-    #     else:
-    #         print("< Error: No active transaction to rollback. >")
+def show_tables(db_name):
+    """Show all tables in the database."""
+    db = Database(db_name)
+    if not db.tables:
+        print("No tables found.")
+        return
 
-    # else:
-    #     print("Invalid command.")
+    print("\nTables in database:")
+    for table_name in db.tables:
+        print(f"  {table_name}")
 
-    # return txn_id  # Return the current transaction ID
+def describe_table(db_name, table_name):
+    """Show the structure of a table."""
+    db = Database(db_name)
+    if table_name not in db.tables:
+        print(f"Error: Table '{table_name}' does not exist.")
+        return
+
+    table = db.tables[table_name]
+    print(f"\nTable: {table_name}")
+    print("-" * 80)
+    print("Column Name".ljust(20) + "Type".ljust(15) + "Nullable".ljust(10) + "Key".ljust(10) + "Default".ljust(15))
+    print("-" * 80)
+
+    for col in table.columns:
+        key_type = "PRI" if col.is_primary else "UNI" if col.is_unique else ""
+        nullable = "NO" if not col.is_nullable else "YES"
+        default = str(col.default) if col.default is not None else ""
+        print(f"{col.name.ljust(20)}{col.data_type.ljust(15)}{nullable.ljust(10)}{key_type.ljust(10)}{default.ljust(15)}")
+
+    if table.foreign_keys:
+        print("\nForeign Keys:")
+        for fk in table.foreign_keys:
+            print(f"  {fk.column} -> {fk.ref_table}.{fk.ref_column} (ON DELETE {fk.on_delete}, ON UPDATE {fk.on_update})")

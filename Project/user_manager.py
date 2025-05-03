@@ -1,7 +1,7 @@
 import os
 import json
 import struct
-from database_manager import create_table, insert_into_table, search_in_table
+from BTree import BTreeIndex
 
 BASE_DIR = "databases"
 
@@ -64,3 +64,95 @@ def get_row_by_location(db_name, table_name, location):
         password = row_data[20:40].decode('utf-8').rstrip('\x00')
         
         return [username, password]
+    
+
+def insert_into_table(db_name, table_name, values):
+    """Insert a row into any table and update column indexes."""
+    table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
+    metadata_file = os.path.join(table_path, "metadata.json")
+    table_data_file = os.path.join(table_path, "table_data.bin")
+    
+    if not os.path.exists(metadata_file):
+        print(f"Error: Metadata for table '{table_name}' does not exist.")
+        return
+    
+    # Load metadata
+    with open(metadata_file, "r") as f:
+        metadata = json.load(f)
+    
+    columns = metadata["columns"]
+    page_size = metadata["page_size"]
+    num_pages = metadata["pages"]
+    
+    if len(values) != len(columns):
+        print(f"Error: Value count does not match column count.")
+        return
+    
+    # Serialize the row into binary format with proper encoding
+    encoded_values = []
+    for value in values:
+        if isinstance(value, str):
+            encoded_value = value.encode('utf-8').ljust(20, b'\x00')
+        else:
+            encoded_value = str(value).encode('utf-8').ljust(20, b'\x00')
+        encoded_values.append(encoded_value)
+
+    row_data = b''.join(encoded_values)
+    row_size = len(row_data)
+    
+    # Check if the row fits into the last page
+    with open(table_data_file, "r+b") as f:
+        if num_pages == 0 or f.seek((num_pages - 1) * page_size) and f.read(row_size) == b"":
+            # Create a new page if necessary
+            f.seek(num_pages * page_size)
+            f.write(b"\x00" * page_size)  # Initialize the page with empty bytes
+            num_pages += 1
+            metadata["pages"] = num_pages
+        
+        # Write the row into the page
+        f.seek((num_pages - 1) * page_size)
+        f.write(row_data)
+    
+    # Update metadata
+    with open(metadata_file, "w") as f:
+        json.dump(metadata, f, indent=4)
+    
+    # Update column indexes
+    for col, value in zip(columns, values):
+        index_file = os.path.join(table_path, metadata["indexes"][col])
+        btree_index = BTreeIndex(index_file)
+        btree_index.insert(value, (num_pages - 1, row_size))  # Store (page ID, row offset)
+        btree_index.close()
+    
+    print(f"Inserted row into '{table_name}': {values}")
+
+
+def search_in_table(db_name, table_name, column_name, search_value):
+    """Search for a value in the indexed column using B-Tree."""
+    table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
+    metadata_file = os.path.join(table_path, "metadata.json")
+    
+    if not os.path.exists(metadata_file):
+        print(f"Error: Metadata for table '{table_name}' does not exist.")
+        return None
+    
+    # Load metadata
+    with open(metadata_file, "r") as f:
+        metadata = json.load(f)
+    
+    if column_name not in metadata["columns"]:
+        print(f"Error: Column '{column_name}' does not exist in the table.")
+        return None
+    
+    # Search in the column index
+    index_file = os.path.join(table_path, metadata["indexes"][column_name])
+    btree_index = BTreeIndex(index_file)
+    result = btree_index.search(search_value)
+    btree_index.close()
+    
+    if result is None:
+        print(f"Value '{search_value}' not found in column '{column_name}'.")
+        return None
+    
+    print(f"Found value '{search_value}' at location: {result}")
+    return result

@@ -1,444 +1,593 @@
 import os
 import json
 import struct
+from datetime import datetime
 from BTree import BTreeIndex
 
 BASE_DIR = "databases"
 
-def create_table(db_name, table_name, columns, page_size=4096):
-    """Creates a table with binary storage and column indexes."""
-    db_path = os.path.join(BASE_DIR, db_name)
-    table_path = os.path.join(db_path, "tables", table_name)
-    
-    if not os.path.exists(db_path):
-        print(f"Error: Database '{db_name}' does not exist.")
-        return
-    
-    if os.path.exists(table_path):
-        print(f"Table '{table_name}' already exists in database '{db_name}'.")
-        return
-    
-    os.makedirs(table_path)
-    
-    # Create binary data file
-    table_data_file = os.path.join(table_path, "table_data.bin")
-    with open(table_data_file, "wb") as f:
-        pass  # Create an empty binary file
-    
-    # Create metadata file
-    metadata = {
-        "columns": columns,
-        "page_size": page_size,
-        "indexes": {col: f"{col}_index.btree" for col in columns},
-        "pages": 0  # Number of pages in the table
-    }
-    metadata_file = os.path.join(table_path, "metadata.json")
-    with open(metadata_file, "w") as f:
-        json.dump(metadata, f, indent=4)
-    
-    # Create empty B-Tree index files for each column
-    for col in columns:
-        index_file = os.path.join(table_path, f"{col}_index.btree")
-        BTreeIndex(index_file).close()  # Initialize empty B-Tree index
-    
-    print(f"Table '{table_name}' created with columns: {', '.join(columns)}")
+class Column:
+    def __init__(self, name, data_type, is_primary=False, is_nullable=True, default=None, is_unique=False):
+        self.name = name
+        self.data_type = data_type
+        self.is_primary = is_primary
+        self.is_nullable = is_nullable
+        self.default = default
+        self.is_unique = is_unique
 
-import os
-import json
-import struct
+class ForeignKey:
+    def __init__(self, column, ref_table, ref_column, on_delete="RESTRICT", on_update="RESTRICT"):
+        self.column = column
+        self.ref_table = ref_table
+        self.ref_column = ref_column
+        self.on_delete = on_delete  # RESTRICT, CASCADE, SET NULL
+        self.on_update = on_update  # RESTRICT, CASCADE, SET NULL
 
-BASE_DIR = "databases"
+class Table:
+    def __init__(self, name, columns, primary_key=None, foreign_keys=None):
+        self.name = name
+        self.columns = columns  # List of Column objects
+        self.primary_key = primary_key
+        self.foreign_keys = foreign_keys or []
+        self.indexes = {}  # Column name -> BTreeIndex
 
-import struct
+class Database:
+    def __init__(self, name):
+        self.name = name
+        self.tables = {}
+        self.path = os.path.join(BASE_DIR, name)
+        self.load_metadata()
 
-def insert_into_table(db_name, table_name, values):
-    """Insert a row into any table and update column indexes."""
-    table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
-    metadata_file = os.path.join(table_path, "metadata.json")
-    table_data_file = os.path.join(table_path, "table_data.bin")
-    
-    if not os.path.exists(metadata_file):
-        print(f"Error: Metadata for table '{table_name}' does not exist.")
-        return
-    
-    # Load metadata
-    with open(metadata_file, "r") as f:
-        metadata = json.load(f)
-    
-    columns = metadata["columns"]
-    page_size = metadata["page_size"]
-    num_pages = metadata["pages"]
-    
-    if len(values) != len(columns):
-        print(f"Error: Value count does not match column count.")
-        return
-    
-    # Serialize the row into binary format with proper encoding
-    encoded_values = []
-    for value in values:
-        if isinstance(value, str):
-            encoded_value = value.encode('utf-8').ljust(20, b'\x00')
-        else:
-            encoded_value = str(value).encode('utf-8').ljust(20, b'\x00')
-        encoded_values.append(encoded_value)
+    def load_metadata(self):
+        """Load database metadata from disk."""
+        if not os.path.exists(self.path):
+            return
 
-    row_data = b''.join(encoded_values)
-    row_size = len(row_data)
-    
-    # Check if the row fits into the last page
-    with open(table_data_file, "r+b") as f:
-        if num_pages == 0 or f.seek((num_pages - 1) * page_size) and f.read(row_size) == b"":
-            # Create a new page if necessary
-            f.seek(num_pages * page_size)
-            f.write(b"\x00" * page_size)  # Initialize the page with empty bytes
-            num_pages += 1
-            metadata["pages"] = num_pages
-        
-        # Write the row into the page
-        f.seek((num_pages - 1) * page_size)
-        f.write(row_data)
-    
-    # Update metadata
-    with open(metadata_file, "w") as f:
-        json.dump(metadata, f, indent=4)
-    
-    # Update column indexes
-    for col, value in zip(columns, values):
-        index_file = os.path.join(table_path, metadata["indexes"][col])
-        btree_index = BTreeIndex(index_file)
-        btree_index.insert(value, (num_pages - 1, row_size))  # Store (page ID, row offset)
-        btree_index.close()
-    
-    print(f"Inserted row into '{table_name}': {values}")
+        metadata_file = os.path.join(self.path, "metadata.json")
+        if os.path.exists(metadata_file):
+            with open(metadata_file, "r") as f:
+                metadata = json.load(f)
+                for table_name, table_data in metadata["tables"].items():
+                    columns = []
+                    for col_data in table_data["columns"]:
+                        col = Column(
+                            name=col_data["name"],
+                            data_type=col_data["type"],
+                            is_primary=col_data.get("is_primary", False),
+                            is_nullable=col_data.get("is_nullable", True),
+                            default=col_data.get("default"),
+                            is_unique=col_data.get("is_unique", False)
+                        )
+                        columns.append(col)
 
+                    foreign_keys = []
+                    for fk_data in table_data.get("foreign_keys", []):
+                        fk = ForeignKey(
+                            column=fk_data["column"],
+                            ref_table=fk_data["ref_table"],
+                            ref_column=fk_data["ref_column"],
+                            on_delete=fk_data.get("on_delete", "RESTRICT"),
+                            on_update=fk_data.get("on_update", "RESTRICT")
+                        )
+                        foreign_keys.append(fk)
 
-def search_in_table(db_name, table_name, column_name, search_value):
-    """Search for a value in the indexed column using B-Tree."""
-    table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
-    metadata_file = os.path.join(table_path, "metadata.json")
-    
-    if not os.path.exists(metadata_file):
-        print(f"Error: Metadata for table '{table_name}' does not exist.")
-        return None
-    
-    # Load metadata
-    with open(metadata_file, "r") as f:
-        metadata = json.load(f)
-    
-    if column_name not in metadata["columns"]:
-        print(f"Error: Column '{column_name}' does not exist in the table.")
-        return None
-    
-    # Search in the column index
-    index_file = os.path.join(table_path, metadata["indexes"][column_name])
-    btree_index = BTreeIndex(index_file)
-    result = btree_index.search(search_value)
-    btree_index.close()
-    
-    if result is None:
-        print(f"Value '{search_value}' not found in column '{column_name}'.")
-        return None
-    
-    print(f"Found value '{search_value}' at location: {result}")
-    return result
+                    table = Table(
+                        name=table_name,
+                        columns=columns,
+                        primary_key=table_data.get("primary_key"),
+                        foreign_keys=foreign_keys
+                    )
+                    self.tables[table_name] = table
 
-def delete_from_table(db_name, table_name, column_name, search_value):
-    """Delete rows from the table where the column matches the search value."""
-    table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
-    metadata_file = os.path.join(table_path, "metadata.json")
-    table_data_file = os.path.join(table_path, "table_data.bin")
-    
-    if not os.path.exists(metadata_file):
-        print(f"Error: Metadata for table '{table_name}' does not exist.")
-        return
-    
-    # Load metadata
-    with open(metadata_file, "r") as f:
-        metadata = json.load(f)
-    
-    if column_name not in metadata["columns"]:
-        print(f"Error: Column '{column_name}' does not exist in the table.")
-        return
-    
-    # Search for the row to delete
-    index_file = os.path.join(table_path, metadata["indexes"][column_name])
-    btree_index = BTreeIndex(index_file)
-    location = btree_index.search(search_value)
-    
-    if location is None:
-        print(f"Value '{search_value}' not found in column '{column_name}'.")
-        return
-    
-    # Mark the row as deleted in the binary file
-    page_id, row_offset = location
-    with open(table_data_file, "r+b") as f:
-        f.seek(page_id * metadata["page_size"] + row_offset)
-        f.write(b"DELETED")  # Mark the row as deleted
-    
-    # Remove the entry from the column index
-    btree_index.delete(search_value)
-    btree_index.close()
-    
-    print(f"Deleted row where {column_name} = '{search_value}'.")
+    def save_metadata(self):
+        """Save database metadata to disk."""
+        metadata = {
+            "tables": {}
+        }
+        for table_name, table in self.tables.items():
+            table_data = {
+                "columns": [
+                    {
+                        "name": col.name,
+                        "type": col.data_type,
+                        "is_primary": col.is_primary,
+                        "is_nullable": col.is_nullable,
+                        "default": col.default,
+                        "is_unique": col.is_unique
+                    }
+                    for col in table.columns
+                ],
+                "primary_key": table.primary_key,
+                "foreign_keys": [
+                    {
+                        "column": fk.column,
+                        "ref_table": fk.ref_table,
+                        "ref_column": fk.ref_column,
+                        "on_delete": fk.on_delete,
+                        "on_update": fk.on_update
+                    }
+                    for fk in table.foreign_keys
+                ]
+            }
+            metadata["tables"][table_name] = table_data
 
-def show_table(db_name, table_name):
-    """Display all rows from the table in a formatted way."""
-    table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
-    metadata_file = os.path.join(table_path, "metadata.json")
-    table_data_file = os.path.join(table_path, "table_data.bin")
-    
-    if not os.path.exists(metadata_file):
-        print(f"Error: Metadata for table '{table_name}' does not exist.")
-        return
-    
-    # Load metadata
-    with open(metadata_file, "r") as f:
-        metadata = json.load(f)
-    
-    columns = metadata["columns"]
-    page_size = metadata["page_size"]
-    num_pages = metadata["pages"]
-    
-    # Calculate column widths
-    col_width = 20  # Fixed width for each column
-    total_width = (col_width + 3) * len(columns) - 1
-    
-    # Print table header
-    print(f"\nTable: {table_name}")
-    print("-" * total_width)
-    header = " | ".join(col.ljust(col_width) for col in columns)
-    print(header)
-    print("-" * total_width)
-    
-    # Read and display all rows
-    with open(table_data_file, "rb") as f:
-        for page_id in range(num_pages):
-            f.seek(page_id * page_size)
-            page_data = f.read(page_size)
-            
-            # Process each row in the page
-            row_size = col_width * len(columns)
-            for i in range(0, len(page_data), row_size):
-                row_data = page_data[i:i+row_size]
-                if row_data.strip(b'\x00'):  # Skip empty rows
-                    # Split row data into fields
-                    fields = []
-                    for j in range(0, len(row_data), col_width):
-                        field = row_data[j:j+col_width].decode('utf-8').rstrip('\x00')
-                        fields.append(field)
-                    
-                    # Skip deleted rows
-                    if not any(field.startswith('DELETED') for field in fields):
-                        # Format and print the row
-                        row = " | ".join(field.ljust(col_width) for field in fields)
-                        if row.strip():  # Only print non-empty rows
-                            print(row)
-    
-    print("-" * total_width)
-
-def update_table(db_name, table_name, column, new_value, condition_column, condition_value):
-    """Update rows in the table where condition_column equals condition_value."""
-    table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
-    metadata_file = os.path.join(table_path, "metadata.json")
-    table_data_file = os.path.join(table_path, "table_data.bin")
-    
-    if not os.path.exists(metadata_file):
-        print(f"Error: Metadata for table '{table_name}' does not exist.")
-        return
-    
-    # Load metadata
-    with open(metadata_file, "r") as f:
-        metadata = json.load(f)
-    
-    columns = metadata["columns"]
-    if column not in columns or condition_column not in columns:
-        print(f"Error: Column does not exist in table.")
-        return
-    
-    # Find the row using the condition
-    location = search_in_table(db_name, table_name, condition_column, condition_value)
-    if location == -1:
-        print(f"No rows found where {condition_column} = '{condition_value}'")
-        return
-    
-    # Get the complete row first
-    page_id, _ = location  # Ignore the provided row_offset
-    col_index = columns.index(column)
-    row_size = 20 * len(columns)  # Each field is 20 bytes
-    field_offset = col_index * 20  # Offset within the row for the target column
-    
-    with open(table_data_file, "r+b") as f:
-        # Calculate the exact position of the field we want to update
-        field_position = (page_id * metadata["page_size"]) + field_offset
-        
-        # Seek to the correct field position
-        f.seek(field_position)
-        
-        # Write the new value
-        new_value_bytes = new_value.encode('utf-8').ljust(20, b'\x00')
-        f.write(new_value_bytes)
-    
-    # Update the index for the changed column
-    if column == condition_column:
-        index_file = os.path.join(table_path, metadata["indexes"][column])
-        btree_index = BTreeIndex(index_file)
-        btree_index.delete(condition_value)
-        btree_index.insert(new_value, location)
-        btree_index.close()
-    
-    print(f"Updated row where {condition_column} = '{condition_value}'")
-    print(f"Set {column} = '{new_value}'")
-
+        os.makedirs(self.path, exist_ok=True)
+        with open(os.path.join(self.path, "metadata.json"), "w") as f:
+            json.dump(metadata, f, indent=4)
 
 def create_database(db_name):
-    """Create a new database directory."""
-    db_path = os.path.join(BASE_DIR, db_name)
-    
-    if os.path.exists(db_path):
+    """Create a new database."""
+    if os.path.exists(os.path.join(BASE_DIR, db_name)):
         print(f"Error: Database '{db_name}' already exists.")
         return False
-    
-    try:
-        os.makedirs(os.path.join(db_path, "tables"))
-        print(f"Database '{db_name}' created successfully.")
-        return True
-    except Exception as e:
-        print(f"Error creating database: {e}")
-        return False
+
+    db = Database(db_name)
+    db.save_metadata()
+    print(f"Database '{db_name}' created successfully.")
+    return True
 
 def drop_database(db_name):
-    """Delete an entire database."""
+    """Delete a database."""
     db_path = os.path.join(BASE_DIR, db_name)
-    
     if not os.path.exists(db_path):
         print(f"Error: Database '{db_name}' does not exist.")
         return False
-    
-    try:
-        import shutil
-        shutil.rmtree(db_path)
-        print(f"Database '{db_name}' dropped successfully.")
-        return True
-    except Exception as e:
-        print(f"Error dropping database: {e}")
-        return False
 
-def list_databases():
-    """List all available databases."""
-    if not os.path.exists(BASE_DIR):
-        print("No databases found.")
-        return []
-    
-    databases = [d for d in os.listdir(BASE_DIR) 
-                if os.path.isdir(os.path.join(BASE_DIR, d))]
-    
-    if not databases:
-        print("No databases found.")
-    else:
-        print("\nAvailable Databases:")
-        for db in databases:
-            print(f"- {db}")
-    
-    return databases
+    import shutil
+    shutil.rmtree(db_path)
+    print(f"Database '{db_name}' dropped successfully.")
+    return True
 
-def list_tables(db_name):
-    """List all tables in a database."""
-    db_path = os.path.join(BASE_DIR, db_name, "tables")
-    
+def create_table(db_name, table_name, columns, primary_key=None, foreign_keys=None, unique_constraints=None):
+    """Create a new table with specified columns, primary key, and foreign keys."""
+    db_path = os.path.join(BASE_DIR, db_name)
     if not os.path.exists(db_path):
         print(f"Error: Database '{db_name}' does not exist.")
+        return False
+
+    table_path = os.path.join(db_path, "tables", table_name)
+    if os.path.exists(table_path):
+        print(f"Error: Table '{table_name}' already exists.")
+        return False
+
+    # Create table directory and files
+    os.makedirs(table_path)
+    
+    # Create data file
+    with open(os.path.join(table_path, "data.bin"), "wb") as f:
+        pass
+
+    # Create table object
+    table = Table(table_name, columns, primary_key, foreign_keys)
+    table.unique_constraints = unique_constraints or []
+    
+    # Add table to database
+    db = Database(db_name)
+    db.tables[table_name] = table
+    db.save_metadata()
+
+    # Create fresh indexes for all columns
+    for column in columns:
+        index_file = os.path.join(table_path, f"{column.name}_index.btree")
+        # Remove existing index file if it exists
+        if os.path.exists(index_file):
+            os.remove(index_file)
+        # Create new index
+        btree = BTreeIndex(index_file)
+        btree.close()
+
+    print(f"Table '{table_name}' created successfully.")
+    return True
+
+def insert_into_table(db_name, table_name, values):
+    """Insert a row into a table with constraint checking."""
+    db = Database(db_name)
+    if table_name not in db.tables:
+        print(f"Error: Table '{table_name}' does not exist.")
+        return False
+
+    table = db.tables[table_name]
+    
+    # Validate column count
+    if len(values) != len(table.columns):
+        print(f"Error: Expected {len(table.columns)} values, got {len(values)}.")
+        return False
+
+    # Validate data types and constraints
+    for i, (col, value) in enumerate(zip(table.columns, values)):
+        # Check NULL constraint
+        if value is None and not col.is_nullable:
+            print(f"Error: Column '{col.name}' cannot be NULL.")
+            return False
+
+        # Check data type
+        try:
+            if col.data_type == "INTEGER":
+                value = int(value)
+            elif col.data_type == "FLOAT":
+                value = float(value)
+            elif col.data_type == "BOOLEAN":
+                value = bool(value)
+            elif col.data_type == "DATE":
+                value = datetime.strptime(value, "%Y-%m-%d").date()
+            values[i] = value
+        except ValueError:
+            print(f"Error: Invalid value type for column '{col.name}'.")
+            return False
+
+    # Check primary key constraint
+    if table.primary_key:
+        pk_col = next(col for col in table.columns if col.name == table.primary_key)
+        pk_idx = table.columns.index(pk_col)
+        pk_value = values[pk_idx]
+        
+        # Check if primary key already exists
+        index_file = os.path.join(BASE_DIR, db_name, "tables", table_name, f"{pk_col.name}_index.btree")
+        btree = BTreeIndex(index_file)
+        if btree.search(pk_value) is not None:
+            print(f"Error: Primary key value '{pk_value}' already exists.")
+            return False
+
+    # Check foreign key constraints
+    for fk in table.foreign_keys:
+        fk_col = next(col for col in table.columns if col.name == fk.column)
+        fk_idx = table.columns.index(fk_col)
+        fk_value = values[fk_idx]
+        
+        if fk_value is not None:  # Allow NULL for nullable foreign keys
+            # Check if referenced value exists
+            ref_index_file = os.path.join(BASE_DIR, db_name, "tables", fk.ref_table, f"{fk.ref_column}_index.btree")
+            if not os.path.exists(ref_index_file):
+                print(f"Error: Referenced table '{fk.ref_table}' does not exist.")
+                return False
+            
+            ref_btree = BTreeIndex(ref_index_file)
+            if ref_btree.search(fk_value) is None:
+                print(f"Error: Foreign key value '{fk_value}' not found in referenced table.")
+                return False
+
+    # Insert the row
+    table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
+    data_file = os.path.join(table_path, "data.bin")
+    
+    # Serialize the row
+    row_data = []
+    for col, value in zip(table.columns, values):
+        if value is None:
+            row_data.append(b"NULL")
+        elif col.data_type == "INTEGER":
+            row_data.append(struct.pack("i", value))
+        elif col.data_type == "FLOAT":
+            row_data.append(struct.pack("f", value))
+        elif col.data_type == "BOOLEAN":
+            row_data.append(struct.pack("?", value))
+        elif col.data_type == "DATE":
+            row_data.append(value.isoformat().encode())
+        else:  # STRING
+            row_data.append(value.encode().ljust(20, b'\x00'))
+
+    # Write to data file and update indexes
+    with open(data_file, "ab") as f:
+        # Write the row data
+        f.write(b''.join(row_data))
+        # Get the position where we wrote the data
+        row_position = f.tell() - len(b''.join(row_data))
+        
+        # Update indexes
+        for col, value in zip(table.columns, values):
+            if value is not None:
+                index_file = os.path.join(table_path, f"{col.name}_index.btree")
+                btree = BTreeIndex(index_file)
+                btree.insert(value, row_position)
+                btree.close()
+
+    print(f"Row inserted successfully into '{table_name}'.")
+    return True
+
+def select_from_table(db_name, table_name, columns=None, where=None, order_by=None, limit=None, offset=0):
+    """Select rows from a table with optional filtering, ordering, and pagination."""
+    try:
+        print(f"Starting SELECT from {table_name}")
+        
+        db = Database(db_name)
+        if table_name not in db.tables:
+            print(f"Error: Table '{table_name}' does not exist.")
+            return []
+
+        table = db.tables[table_name]
+        table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
+        data_file = os.path.join(table_path, "data.bin")
+
+        if not os.path.exists(data_file):
+            print(f"Error: Data file for table '{table_name}' does not exist.")
+            return []
+
+        # Determine which columns to select
+        if columns is None or columns == ["*"]:
+            columns = [col.name for col in table.columns]
+        else:
+            # Validate column names
+            for col in columns:
+                if col not in [c.name for c in table.columns]:
+                    print(f"Error: Column '{col}' does not exist.")
+                    return []
+
+        # Read and filter rows
+        results = []
+        with open(data_file, "rb") as f:
+            # Get file size
+            f.seek(0, 2)
+            file_size = f.tell()
+            f.seek(0)
+            
+            while f.tell() < file_size:
+                try:
+                    row = []
+                    for col in table.columns:
+                        try:
+                            if col.data_type == "INTEGER":
+                                value = struct.unpack("i", f.read(4))[0]
+                            elif col.data_type == "FLOAT":
+                                value = struct.unpack("f", f.read(4))[0]
+                            elif col.data_type == "BOOLEAN":
+                                value = struct.unpack("?", f.read(1))[0]
+                            elif col.data_type == "DATE":
+                                date_str = f.read(10).decode()
+                                value = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str.strip() else None
+                            else:  # STRING
+                                value = f.read(20).decode().rstrip('\x00')
+                                value = None if not value.strip() else value
+                            row.append(value)
+                        except (struct.error, ValueError, EOFError) as e:
+                            print(f"Error reading column {col.name}: {str(e)}")
+                            raise
+
+                    # Apply WHERE clause if specified
+                    if where is None or where(row):
+                        # Select only requested columns
+                        selected_row = []
+                        for col_name in columns:
+                            col_idx = next(i for i, c in enumerate(table.columns) if c.name == col_name)
+                            selected_row.append(row[col_idx])
+                        results.append(selected_row)
+
+                except (struct.error, ValueError, EOFError) as e:
+                    print(f"Error reading row: {str(e)}")
+                    break
+
+        print(f"Found {len(results)} rows")
+
+        # Apply ORDER BY if specified
+        if order_by:
+            order_func, reverse = order_by
+            results.sort(key=order_func, reverse=reverse)
+
+        # Apply LIMIT and OFFSET
+        if limit is not None:
+            results = results[offset:offset + limit]
+        else:
+            results = results[offset:]
+
+        return results
+
+    except Exception as e:
+        print(f"Error in select_from_table: {str(e)}")
         return []
-    
-    tables = [t for t in os.listdir(db_path) 
-             if os.path.isdir(os.path.join(db_path, t))]
-    
-    if not tables:
-        print(f"No tables found in database '{db_name}'.")
+
+def join_tables(db_name, left_table, right_table, left_col, right_col, columns=None, where=None, order_by=None, limit=None, offset=0):
+    """Perform a join between two tables with optional filtering, ordering, and pagination."""
+    db = Database(db_name)
+    if left_table not in db.tables or right_table not in db.tables:
+        print("Error: One or both tables do not exist.")
+        return []
+
+    # Get table objects
+    left = db.tables[left_table]
+    right = db.tables[right_table]
+
+    # Validate join columns
+    if left_col not in [c.name for c in left.columns] or right_col not in [c.name for c in right.columns]:
+        print("Error: Invalid join column(s).")
+        return []
+
+    # Determine which columns to select
+    if columns is None:
+        columns = [f"{left_table}.{c.name}" for c in left.columns] + \
+                 [f"{right_table}.{c.name}" for c in right.columns]
+
+    # Perform the join
+    results = []
+    left_data = select_from_table(db_name, left_table)
+    right_data = select_from_table(db_name, right_table)
+
+    left_col_idx = next(i for i, c in enumerate(left.columns) if c.name == left_col)
+    right_col_idx = next(i for i, c in enumerate(right.columns) if c.name == right_col)
+
+    for left_row in left_data:
+        for right_row in right_data:
+            if left_row[left_col_idx] == right_row[right_col_idx]:
+                # Combine rows based on selected columns
+                joined_row = []
+                for col in columns:
+                    if col.startswith(f"{left_table}."):
+                        col_name = col.split(".")[1]
+                        col_idx = next(i for i, c in enumerate(left.columns) if c.name == col_name)
+                        joined_row.append(left_row[col_idx])
+                    else:
+                        col_name = col.split(".")[1]
+                        col_idx = next(i for i, c in enumerate(right.columns) if c.name == col_name)
+                        joined_row.append(right_row[col_idx])
+                
+                # Apply WHERE clause if specified
+                if where is None or where(joined_row):
+                    results.append(joined_row)
+
+    # Apply ORDER BY if specified
+    if order_by:
+        order_func, reverse = order_by
+        results.sort(key=order_func, reverse=reverse)
+
+    # Apply LIMIT and OFFSET
+    if limit is not None:
+        results = results[offset:offset + limit]
     else:
-        print(f"\nTables in database '{db_name}':")
-        for table in tables:
-            print(f"- {table}")
-    
-    return tables
+        results = results[offset:]
 
-def drop_table(db_name, table_name):
-    """Delete a table and its associated files."""
-    table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
-    
-    if not os.path.exists(table_path):
-        print(f"Error: Table '{table_name}' does not exist in database '{db_name}'.")
-        return False
-    
-    try:
-        import shutil
-        shutil.rmtree(table_path)
-        print(f"Table '{table_name}' dropped successfully.")
-        return True
-    except Exception as e:
-        print(f"Error dropping table: {e}")
+    return results
+
+def delete_from_table(db_name, table_name, where=None, returning_columns=None):
+    """Delete rows from a table with optional filtering and returning deleted rows."""
+    db = Database(db_name)
+    if table_name not in db.tables:
+        print(f"Error: Table '{table_name}' does not exist.")
         return False
 
-def describe_table(db_name, table_name):
-    """Show table structure and metadata."""
+    table = db.tables[table_name]
     table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
-    metadata_file = os.path.join(table_path, "metadata.json")
-    
-    if not os.path.exists(metadata_file):
-        print(f"Error: Table '{table_name}' does not exist in database '{db_name}'.")
-        return None
-    
-    try:
-        with open(metadata_file, "r") as f:
-            metadata = json.load(f)
-        
-        print(f"\nTable: {table_name}")
-        print("Columns:")
-        for col in metadata["columns"]:
-            print(f"- {col}")
-        print(f"\nPage size: {metadata['page_size']} bytes")
-        print(f"Number of pages: {metadata['pages']}")
-        print("\nIndexes:")
-        for col, index_file in metadata["indexes"].items():
-            print(f"- {col}: {index_file}")
-        
-        return metadata
-    except Exception as e:
-        print(f"Error reading table metadata: {e}")
-        return None
+    data_file = os.path.join(table_path, "data.bin")
 
-def truncate_table(db_name, table_name):
-    """Remove all rows from a table while keeping its structure."""
+    # Check for foreign key references
+    for other_table in db.tables.values():
+        for fk in other_table.foreign_keys:
+            if fk.ref_table == table_name:
+                # Check if any rows reference this table
+                ref_data = select_from_table(db_name, other_table.name)
+                if ref_data:
+                    print(f"Error: Cannot delete from '{table_name}' - referenced by '{other_table.name}'.")
+                    return False
+
+    # Delete rows
+    temp_file = os.path.join(table_path, "temp.bin")
+    deleted_rows = []
+    
+    with open(data_file, "rb") as f_in, open(temp_file, "wb") as f_out:
+        while True:
+            row = []
+            for col in table.columns:
+                if col.data_type == "INTEGER":
+                    value = struct.unpack("i", f_in.read(4))[0]
+                elif col.data_type == "FLOAT":
+                    value = struct.unpack("f", f_in.read(4))[0]
+                elif col.data_type == "BOOLEAN":
+                    value = struct.unpack("?", f_in.read(1))[0]
+                elif col.data_type == "DATE":
+                    value = datetime.strptime(f_in.read(10).decode(), "%Y-%m-%d").date()
+                else:  # STRING
+                    value = f_in.read(20).decode().rstrip('\x00')
+                row.append(value)
+
+            if not row[0]:  # End of file
+                break
+
+            # Keep row if it doesn't match WHERE clause
+            if where is None or not where(row):
+                # Write row to temp file
+                for col, value in zip(table.columns, row):
+                    if col.data_type == "INTEGER":
+                        f_out.write(struct.pack("i", value))
+                    elif col.data_type == "FLOAT":
+                        f_out.write(struct.pack("f", value))
+                    elif col.data_type == "BOOLEAN":
+                        f_out.write(struct.pack("?", value))
+                    elif col.data_type == "DATE":
+                        f_out.write(value.isoformat().encode())
+                    else:  # STRING
+                        f_out.write(value.encode().ljust(20, b'\x00'))
+            elif returning_columns:
+                # Store deleted row if RETURNING is specified
+                selected_row = []
+                for col_name in returning_columns:
+                    col_idx = next(i for i, c in enumerate(table.columns) if c.name == col_name)
+                    selected_row.append(row[col_idx])
+                deleted_rows.append(selected_row)
+
+    # Replace original file with temp file
+    os.replace(temp_file, data_file)
+
+    # Update indexes
+    for col in table.columns:
+        index_file = os.path.join(table_path, f"{col.name}_index.btree")
+        btree = BTreeIndex(index_file)
+        btree.close()  # Recreate empty index
+
+    print(f"Rows deleted successfully from '{table_name}'.")
+    return deleted_rows if returning_columns else True
+
+def update_table(db_name, table_name, set_values, where=None, returning_columns=None):
+    """Update rows in a table with optional filtering and returning updated rows."""
+    db = Database(db_name)
+    if table_name not in db.tables:
+        print(f"Error: Table '{table_name}' does not exist.")
+        return False
+
+    table = db.tables[table_name]
     table_path = os.path.join(BASE_DIR, db_name, "tables", table_name)
-    metadata_file = os.path.join(table_path, "metadata.json")
-    table_data_file = os.path.join(table_path, "table_data.bin")
+    data_file = os.path.join(table_path, "data.bin")
+
+    # Validate column names
+    for col_name in set_values:
+        if col_name not in [c.name for c in table.columns]:
+            print(f"Error: Column '{col_name}' does not exist.")
+            return False
+
+    # Update rows
+    temp_file = os.path.join(table_path, "temp.bin")
+    updated_rows = []
     
-    if not os.path.exists(metadata_file):
-        print(f"Error: Table '{table_name}' does not exist in database '{db_name}'.")
-        return False
-    
-    try:
-        # Load metadata
-        with open(metadata_file, "r") as f:
-            metadata = json.load(f)
-        
-        # Clear the data file
-        with open(table_data_file, "wb") as f:
-            pass
-        
-        # Reset page count
-        metadata["pages"] = 0
-        
-        # Update metadata
-        with open(metadata_file, "w") as f:
-            json.dump(metadata, f, indent=4)
-        
-        # Clear all indexes
-        for col in metadata["columns"]:
-            index_file = os.path.join(table_path, metadata["indexes"][col])
-            BTreeIndex(index_file).close()  # Recreate empty index
-        
-        print(f"Table '{table_name}' truncated successfully.")
-        return True
-    except Exception as e:
-        print(f"Error truncating table: {e}")
-        return False
+    with open(data_file, "rb") as f_in, open(temp_file, "wb") as f_out:
+        while True:
+            row = []
+            for col in table.columns:
+                if col.data_type == "INTEGER":
+                    value = struct.unpack("i", f_in.read(4))[0]
+                elif col.data_type == "FLOAT":
+                    value = struct.unpack("f", f_in.read(4))[0]
+                elif col.data_type == "BOOLEAN":
+                    value = struct.unpack("?", f_in.read(1))[0]
+                elif col.data_type == "DATE":
+                    value = datetime.strptime(f_in.read(10).decode(), "%Y-%m-%d").date()
+                else:  # STRING
+                    value = f_in.read(20).decode().rstrip('\x00')
+                row.append(value)
+
+            if not row[0]:  # End of file
+                break
+
+            # Update row if it matches WHERE clause
+            if where is None or where(row):
+                for col_name, new_value in set_values.items():
+                    col_idx = next(i for i, c in enumerate(table.columns) if c.name == col_name)
+                    row[col_idx] = new_value
+                
+                # Store updated row if RETURNING is specified
+                if returning_columns:
+                    selected_row = []
+                    for col_name in returning_columns:
+                        col_idx = next(i for i, c in enumerate(table.columns) if c.name == col_name)
+                        selected_row.append(row[col_idx])
+                    updated_rows.append(selected_row)
+
+            # Write row to temp file
+            for col, value in zip(table.columns, row):
+                if col.data_type == "INTEGER":
+                    f_out.write(struct.pack("i", value))
+                elif col.data_type == "FLOAT":
+                    f_out.write(struct.pack("f", value))
+                elif col.data_type == "BOOLEAN":
+                    f_out.write(struct.pack("?", value))
+                elif col.data_type == "DATE":
+                    f_out.write(value.isoformat().encode())
+                else:  # STRING
+                    f_out.write(value.encode().ljust(20, b'\x00'))
+
+    # Replace original file with temp file
+    os.replace(temp_file, data_file)
+
+    # Update indexes
+    for col in table.columns:
+        index_file = os.path.join(table_path, f"{col.name}_index.btree")
+        btree = BTreeIndex(index_file)
+        btree.close()  # Recreate empty index
+
+    print(f"Rows updated successfully in '{table_name}'.")
+    return updated_rows if returning_columns else True

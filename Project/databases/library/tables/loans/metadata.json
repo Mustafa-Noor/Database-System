@@ -1,0 +1,18 @@
+{
+    "columns": [
+        "loan_id",
+        "member_id",
+        "book_id",
+        "FOREIGN KEY(member_id) REFERENCES members(member_id)",
+        "FOREIGN KEY(book_id) REFERENCES books(book_id)"
+    ],
+    "page_size": 4096,
+    "indexes": {
+        "loan_id": "loan_id_index.btree",
+        "member_id": "member_id_index.btree",
+        "book_id": "book_id_index.btree",
+        "FOREIGN KEY(member_id) REFERENCES members(member_id)": "FOREIGN KEY(member_id) REFERENCES members(member_id)_index.btree",
+        "FOREIGN KEY(book_id) REFERENCES books(book_id)": "FOREIGN KEY(book_id) REFERENCES books(book_id)_index.btree"
+    },
+    "pages": 0
+}

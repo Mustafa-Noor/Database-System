@@ -1,0 +1,14 @@
+{
+    "columns": [
+        "book_id",
+        "title",
+        "author"
+    ],
+    "page_size": 4096,
+    "indexes": {
+        "book_id": "book_id_index.btree",
+        "title": "title_index.btree",
+        "author": "author_index.btree"
+    },
+    "pages": 1
+}

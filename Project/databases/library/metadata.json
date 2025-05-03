@@ -1,0 +1,34 @@
+{
+    "tables": {
+        "users": {
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "INTEGER",
+                    "is_primary": true,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "name",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "email",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                }
+            ],
+            "primary_key": "id",
+            "foreign_keys": []
+        }
+    }
+}

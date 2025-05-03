@@ -7,28 +7,63 @@ class BTreeIndex:
         """Initialize the B-Tree index."""
         self.index_file = index_file
         self.tree = None
+        self.load_index()
 
-        # Load or create the B-Tree index
-        if os.path.exists(index_file):
-            with open(index_file, "rb") as f:
-                self.tree = pickle.load(f)  # Load the B-Tree from the file
-        else:
-            self.tree = OOBTree()  # Create a new B-Tree
+    def load_index(self):
+        """Load or create the B-Tree index."""
+        try:
+            if os.path.exists(self.index_file):
+                with open(self.index_file, "rb") as f:
+                    self.tree = pickle.load(f)
+            else:
+                self.tree = OOBTree()
+        except (pickle.UnpicklingError, EOFError, Exception) as e:
+            print(f"Error loading index {self.index_file}: {str(e)}")
+            self.tree = OOBTree()
 
     def insert(self, key, row_id):
         """Insert a key-row_id pair into the B-Tree."""
-        self.tree[key] = row_id
+        try:
+            self.tree[key] = row_id
+        except Exception as e:
+            print(f"Error inserting key {key}: {str(e)}")
 
     def delete(self, key):
         """Delete a key from the B-Tree."""
-        if key in self.tree:
-            del self.tree[key]
+        try:
+            if key in self.tree:
+                del self.tree[key]
+        except Exception as e:
+            print(f"Error deleting key {key}: {str(e)}")
 
     def search(self, key):
         """Search for a key in the B-Tree and return the row_id."""
-        return self.tree.get(key, -1)
+        try:
+            return self.tree.get(key, None)
+        except Exception as e:
+            print(f"Error searching for key {key}: {str(e)}")
+            return None
+
+    def range_search(self, start_key=None, end_key=None):
+        """Search for keys within a range and return their row_ids."""
+        try:
+            if start_key is None and end_key is None:
+                return list(self.tree.values())
+            
+            if start_key is None:
+                return [v for k, v in self.tree.items(min=end_key, max=end_key)]
+            if end_key is None:
+                return [v for k, v in self.tree.items(min=start_key, max=start_key)]
+            
+            return [v for k, v in self.tree.items(min=start_key, max=end_key)]
+        except Exception as e:
+            print(f"Error in range search: {str(e)}")
+            return []
 
     def close(self):
         """Save and close the B-Tree index."""
-        with open(self.index_file, "wb") as f:
-            pickle.dump(self.tree, f)  # Save the B-Tree to the file
+        try:
+            with open(self.index_file, "wb") as f:
+                pickle.dump(self.tree, f)
+        except Exception as e:
+            print(f"Error saving index {self.index_file}: {str(e)}")
