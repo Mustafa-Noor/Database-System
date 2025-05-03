@@ -235,15 +235,26 @@ def insert_into_table(db_name, table_name, values):
         fk_value = values[fk_idx]
         
         if fk_value is not None:  # Allow NULL for nullable foreign keys
+            # Check if referenced table exists
+            if fk.ref_table not in db.tables:
+                print(f"Error: Referenced table '{fk.ref_table}' does not exist.")
+                return False
+            
+            # Check if referenced column exists
+            ref_table = db.tables[fk.ref_table]
+            if fk.ref_column not in [c.name for c in ref_table.columns]:
+                print(f"Error: Referenced column '{fk.ref_column}' does not exist in table '{fk.ref_table}'.")
+                return False
+            
             # Check if referenced value exists
             ref_index_file = os.path.join(BASE_DIR, db_name, "tables", fk.ref_table, f"{fk.ref_column}_index.btree")
             if not os.path.exists(ref_index_file):
-                print(f"Error: Referenced table '{fk.ref_table}' does not exist.")
+                print(f"Error: Index for referenced column '{fk.ref_column}' does not exist.")
                 return False
             
             ref_btree = BTreeIndex(ref_index_file)
             if ref_btree.search(fk_value) is None:
-                print(f"Error: Foreign key value '{fk_value}' not found in referenced table.")
+                print(f"Error: Foreign key value '{fk_value}' not found in referenced table '{fk.ref_table}'.")
                 return False
 
     # Insert the row
@@ -374,66 +385,205 @@ def select_from_table(db_name, table_name, columns=None, where=None, order_by=No
         print(f"Error in select_from_table: {str(e)}")
         return []
 
-def join_tables(db_name, left_table, right_table, left_col, right_col, columns=None, where=None, order_by=None, limit=None, offset=0):
+def join_tables(db_name, left_table, right_table, left_col, right_col, columns=None, where=None, order_by=None, limit=None, offset=0, join_type="INNER"):
     """Perform a join between two tables with optional filtering, ordering, and pagination."""
-    db = Database(db_name)
-    if left_table not in db.tables or right_table not in db.tables:
-        print("Error: One or both tables do not exist.")
-        return []
+    try:
+        db = Database(db_name)
+        if left_table not in db.tables or right_table not in db.tables:
+            print("Error: One or both tables do not exist.")
+            return []
 
-    # Get table objects
-    left = db.tables[left_table]
-    right = db.tables[right_table]
+        # Get table objects
+        left = db.tables[left_table]
+        right = db.tables[right_table]
 
-    # Validate join columns
-    if left_col not in [c.name for c in left.columns] or right_col not in [c.name for c in right.columns]:
-        print("Error: Invalid join column(s).")
-        return []
+        # Validate join columns
+        if left_col not in [c.name for c in left.columns] or right_col not in [c.name for c in right.columns]:
+            print("Error: Invalid join column(s).")
+            return []
 
-    # Determine which columns to select
-    if columns is None:
-        columns = [f"{left_table}.{c.name}" for c in left.columns] + \
-                 [f"{right_table}.{c.name}" for c in right.columns]
+        # Determine which columns to select
+        if columns is None:
+            columns = [f"{left_table}.{c.name}" for c in left.columns] + \
+                     [f"{right_table}.{c.name}" for c in right.columns]
 
-    # Perform the join
-    results = []
-    left_data = select_from_table(db_name, left_table)
-    right_data = select_from_table(db_name, right_table)
+        # Perform the join
+        results = []
+        left_data = select_from_table(db_name, left_table)
+        right_data = select_from_table(db_name, right_table)
 
-    left_col_idx = next(i for i, c in enumerate(left.columns) if c.name == left_col)
-    right_col_idx = next(i for i, c in enumerate(right.columns) if c.name == right_col)
+        left_col_idx = next(i for i, c in enumerate(left.columns) if c.name == left_col)
+        right_col_idx = next(i for i, c in enumerate(right.columns) if c.name == right_col)
 
-    for left_row in left_data:
+        # Create lookup dictionary for right table
+        right_lookup = {}
         for right_row in right_data:
-            if left_row[left_col_idx] == right_row[right_col_idx]:
-                # Combine rows based on selected columns
-                joined_row = []
-                for col in columns:
-                    if col.startswith(f"{left_table}."):
-                        col_name = col.split(".")[1]
-                        col_idx = next(i for i, c in enumerate(left.columns) if c.name == col_name)
-                        joined_row.append(left_row[col_idx])
-                    else:
-                        col_name = col.split(".")[1]
-                        col_idx = next(i for i, c in enumerate(right.columns) if c.name == col_name)
-                        joined_row.append(right_row[col_idx])
-                
-                # Apply WHERE clause if specified
-                if where is None or where(joined_row):
-                    results.append(joined_row)
+            key = right_row[right_col_idx]
+            if key not in right_lookup:
+                right_lookup[key] = []
+            right_lookup[key].append(right_row)
 
-    # Apply ORDER BY if specified
-    if order_by:
-        order_func, reverse = order_by
-        results.sort(key=order_func, reverse=reverse)
+        # Perform join based on type
+        if join_type == "INNER":
+            for left_row in left_data:
+                key = left_row[left_col_idx]
+                if key in right_lookup:
+                    for right_row in right_lookup[key]:
+                        joined_row = []
+                        for col in columns:
+                            if col.startswith(f"{left_table}."):
+                                col_name = col.split(".")[1]
+                                col_idx = next(i for i, c in enumerate(left.columns) if c.name == col_name)
+                                joined_row.append(left_row[col_idx])
+                            else:
+                                col_name = col.split(".")[1]
+                                col_idx = next(i for i, c in enumerate(right.columns) if c.name == col_name)
+                                joined_row.append(right_row[col_idx])
+                        
+                        if where is None or where(joined_row):
+                            results.append(joined_row)
 
-    # Apply LIMIT and OFFSET
-    if limit is not None:
-        results = results[offset:offset + limit]
-    else:
-        results = results[offset:]
+        elif join_type == "LEFT":
+            for left_row in left_data:
+                key = left_row[left_col_idx]
+                if key in right_lookup:
+                    for right_row in right_lookup[key]:
+                        joined_row = []
+                        for col in columns:
+                            if col.startswith(f"{left_table}."):
+                                col_name = col.split(".")[1]
+                                col_idx = next(i for i, c in enumerate(left.columns) if c.name == col_name)
+                                joined_row.append(left_row[col_idx])
+                            else:
+                                col_name = col.split(".")[1]
+                                col_idx = next(i for i, c in enumerate(right.columns) if c.name == col_name)
+                                joined_row.append(right_row[col_idx])
+                        
+                        if where is None or where(joined_row):
+                            results.append(joined_row)
+                else:
+                    # No matching right row, fill with NULLs
+                    joined_row = []
+                    for col in columns:
+                        if col.startswith(f"{left_table}."):
+                            col_name = col.split(".")[1]
+                            col_idx = next(i for i, c in enumerate(left.columns) if c.name == col_name)
+                            joined_row.append(left_row[col_idx])
+                        else:
+                            joined_row.append(None)
+                    
+                    if where is None or where(joined_row):
+                        results.append(joined_row)
 
-    return results
+        elif join_type == "RIGHT":
+            # Create lookup dictionary for left table
+            left_lookup = {}
+            for left_row in left_data:
+                key = left_row[left_col_idx]
+                if key not in left_lookup:
+                    left_lookup[key] = []
+                left_lookup[key].append(left_row)
+
+            for right_row in right_data:
+                key = right_row[right_col_idx]
+                if key in left_lookup:
+                    for left_row in left_lookup[key]:
+                        joined_row = []
+                        for col in columns:
+                            if col.startswith(f"{left_table}."):
+                                col_name = col.split(".")[1]
+                                col_idx = next(i for i, c in enumerate(left.columns) if c.name == col_name)
+                                joined_row.append(left_row[col_idx])
+                            else:
+                                col_name = col.split(".")[1]
+                                col_idx = next(i for i, c in enumerate(right.columns) if c.name == col_name)
+                                joined_row.append(right_row[col_idx])
+                        
+                        if where is None or where(joined_row):
+                            results.append(joined_row)
+                else:
+                    # No matching left row, fill with NULLs
+                    joined_row = []
+                    for col in columns:
+                        if col.startswith(f"{left_table}."):
+                            joined_row.append(None)
+                        else:
+                            col_name = col.split(".")[1]
+                            col_idx = next(i for i, c in enumerate(right.columns) if c.name == col_name)
+                            joined_row.append(right_row[col_idx])
+                    
+                    if where is None or where(joined_row):
+                        results.append(joined_row)
+
+        elif join_type == "FULL":
+            # Perform LEFT JOIN
+            for left_row in left_data:
+                key = left_row[left_col_idx]
+                if key in right_lookup:
+                    for right_row in right_lookup[key]:
+                        joined_row = []
+                        for col in columns:
+                            if col.startswith(f"{left_table}."):
+                                col_name = col.split(".")[1]
+                                col_idx = next(i for i, c in enumerate(left.columns) if c.name == col_name)
+                                joined_row.append(left_row[col_idx])
+                            else:
+                                col_name = col.split(".")[1]
+                                col_idx = next(i for i, c in enumerate(right.columns) if c.name == col_name)
+                                joined_row.append(right_row[col_idx])
+                        
+                        if where is None or where(joined_row):
+                            results.append(joined_row)
+                else:
+                    # No matching right row, fill with NULLs
+                    joined_row = []
+                    for col in columns:
+                        if col.startswith(f"{left_table}."):
+                            col_name = col.split(".")[1]
+                            col_idx = next(i for i, c in enumerate(left.columns) if c.name == col_name)
+                            joined_row.append(left_row[col_idx])
+                        else:
+                            joined_row.append(None)
+                    
+                    if where is None or where(joined_row):
+                        results.append(joined_row)
+
+            # Add unmatched right rows
+            for right_row in right_data:
+                key = right_row[right_col_idx]
+                if key not in {row[left_col_idx] for row in left_data}:
+                    joined_row = []
+                    for col in columns:
+                        if col.startswith(f"{left_table}."):
+                            joined_row.append(None)
+                        else:
+                            col_name = col.split(".")[1]
+                            col_idx = next(i for i, c in enumerate(right.columns) if c.name == col_name)
+                            joined_row.append(right_row[col_idx])
+                    
+                    if where is None or where(joined_row):
+                        results.append(joined_row)
+
+        else:
+            print(f"Error: Unsupported join type '{join_type}'")
+            return []
+
+        # Apply ORDER BY if specified
+        if order_by:
+            order_func, reverse = order_by
+            results.sort(key=order_func, reverse=reverse)
+
+        # Apply LIMIT and OFFSET
+        if limit is not None:
+            results = results[offset:offset + limit]
+        else:
+            results = results[offset:]
+
+        return results
+
+    except Exception as e:
+        print(f"Error in join_tables: {str(e)}")
+        return []
 
 def delete_from_table(db_name, table_name, where=None, returning_columns=None):
     """Delete rows from a table with optional filtering and returning deleted rows."""

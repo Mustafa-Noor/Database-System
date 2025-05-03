@@ -47,15 +47,28 @@ def parse_command(command):
         for col_def in columns_def:
             # Parse column definition
             col_parts = col_def.split()
+            if not col_parts:  # Skip empty parts
+                continue
+                
             col_name = col_parts[0]
+            
+            # Check if this is a FOREIGN KEY constraint
+            if col_name.upper() == "FOREIGN":
+                # Parse foreign key constraint
+                fk_match = re.search(r"FOREIGN KEY\s*\((\w+)\)\s*REFERENCES\s+(\w+)\s*\((\w+)\)", col_def, re.IGNORECASE)
+                if fk_match:
+                    fk_col, ref_table, ref_col = fk_match.groups()
+                    fk = ForeignKey(fk_col, ref_table, ref_col)
+                    foreign_keys.append(fk)
+                continue
+            
+            # Regular column definition
             col_type = col_parts[1].upper()
             
             # Check for PRIMARY KEY
-            if "PRIMARY KEY" in col_def.upper():
+            is_primary = "PRIMARY KEY" in col_def.upper()
+            if is_primary:
                 primary_key = col_name
-                is_primary = True
-            else:
-                is_primary = False
             
             # Check for NOT NULL
             is_nullable = "NOT NULL" not in col_def.upper()
@@ -72,13 +85,6 @@ def parse_command(command):
             # Create column object
             column = Column(col_name, col_type, is_primary, is_nullable, default, is_unique)
             columns.append(column)
-            
-            # Check for FOREIGN KEY
-            fk_match = re.search(r"FOREIGN KEY\s*\((\w+)\)\s*REFERENCES\s+(\w+)\s*\((\w+)\)(?:\s+ON\s+DELETE\s+(\w+))?(?:\s+ON\s+UPDATE\s+(\w+))?", col_def, re.IGNORECASE)
-            if fk_match:
-                fk_col, ref_table, ref_col, on_delete, on_update = fk_match.groups()
-                fk = ForeignKey(fk_col, ref_table, ref_col, on_delete or "RESTRICT", on_update or "RESTRICT")
-                foreign_keys.append(fk)
         
         create_table(current_db, table_name, columns, primary_key, foreign_keys, unique_constraints)
 
@@ -113,7 +119,7 @@ def parse_command(command):
 
     # Enhanced SELECT query support
     elif match := re.match(
-        r"SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(.+?))?(?:\s+LIMIT\s+(\d+))?(?:\s+OFFSET\s+(\d+))?$", 
+        r"SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+(?:INNER|LEFT|RIGHT|FULL)?\s*JOIN\s+(\w+)\s+ON\s+(.+?))?(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(.+?))?(?:\s+LIMIT\s+(\d+))?(?:\s+OFFSET\s+(\d+))?$", 
         command, re.IGNORECASE
     ):
         if not current_db:
@@ -121,44 +127,85 @@ def parse_command(command):
             return
         
         select_columns = [col.strip() for col in match.group(1).split(",")]
-        table_name = match.group(2)
-        where_clause = match.group(3)
-        order_by = match.group(4)
-        limit = int(match.group(5)) if match.group(5) else None
-        offset = int(match.group(6)) if match.group(6) else 0
+        left_table = match.group(2)
+        right_table = match.group(3)
+        join_condition = match.group(4)
+        where_clause = match.group(5)
+        order_by = match.group(6)
+        limit = int(match.group(7)) if match.group(7) else None
+        offset = int(match.group(8)) if match.group(8) else 0
         
-        # Get all columns from the table for WHERE and ORDER BY
-        db = Database(current_db)
-        if table_name not in db.tables:
-            print(f"Error: Table '{table_name}' does not exist.")
-            return
+        # Determine join type
+        join_type = "INNER"
+        if "LEFT JOIN" in command.upper():
+            join_type = "LEFT"
+        elif "RIGHT JOIN" in command.upper():
+            join_type = "RIGHT"
+        elif "FULL JOIN" in command.upper():
+            join_type = "FULL"
         
-        table = db.tables[table_name]
-        all_columns = [col.name for col in table.columns]
-        
-        # Handle SELECT *
-        if select_columns == ["*"]:
-            select_columns = all_columns
-        
-        # Parse WHERE clause if present
-        where_func = None
-        if where_clause:
-            where_func = parse_where_clause(where_clause, all_columns)
-        
-        # Parse ORDER BY clause if present
-        order_by_func = None
-        if order_by:
-            order_by_func = parse_order_by_clause(order_by, all_columns)
-        
-        results = select_from_table(
-            current_db, 
-            table_name, 
-            select_columns, 
-            where_func, 
-            order_by_func,
-            limit,
-            offset
-        )
+        if right_table:  # This is a JOIN query
+            # Parse join condition
+            join_parts = join_condition.split("=")
+            left_col = join_parts[0].strip().split(".")[1]
+            right_col = join_parts[1].strip().split(".")[1]
+            
+            # Parse WHERE clause if present
+            where_func = None
+            if where_clause:
+                where_func = parse_where_clause(where_clause, select_columns)
+            
+            # Parse ORDER BY clause if present
+            order_by_func = None
+            if order_by:
+                order_by_func = parse_order_by_clause(order_by, select_columns)
+            
+            results = join_tables(
+                current_db,
+                left_table,
+                right_table,
+                left_col,
+                right_col,
+                select_columns,
+                where_func,
+                order_by_func,
+                limit,
+                offset,
+                join_type
+            )
+        else:  # This is a simple SELECT query
+            # Get all columns from the table for WHERE and ORDER BY
+            db = Database(current_db)
+            if left_table not in db.tables:
+                print(f"Error: Table '{left_table}' does not exist.")
+                return
+            
+            table = db.tables[left_table]
+            all_columns = [col.name for col in table.columns]
+            
+            # Handle SELECT *
+            if select_columns == ["*"]:
+                select_columns = all_columns
+            
+            # Parse WHERE clause if present
+            where_func = None
+            if where_clause:
+                where_func = parse_where_clause(where_clause, all_columns)
+            
+            # Parse ORDER BY clause if present
+            order_by_func = None
+            if order_by:
+                order_by_func = parse_order_by_clause(order_by, all_columns)
+            
+            results = select_from_table(
+                current_db, 
+                left_table, 
+                select_columns, 
+                where_func, 
+                order_by_func,
+                limit,
+                offset
+            )
         
         print_results(results, select_columns)
 
@@ -196,53 +243,6 @@ def parse_command(command):
             print_results(results, all_columns)
         except Exception as e:
             print(f"Error executing SELECT: {str(e)}")  # Debug print
-
-    elif match := re.match(
-        r"SELECT\s+(.+?)\s+FROM\s+(\w+)\s+(?:INNER|LEFT|RIGHT|FULL)?\s*JOIN\s+(\w+)\s+ON\s+(.+?)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(.+?))?(?:\s+LIMIT\s+(\d+))?(?:\s+OFFSET\s+(\d+))?$", 
-        command, re.IGNORECASE
-    ):
-        if not current_db:
-            print("Error: No database selected. Use 'USE DATABASE db_name'.")
-            return
-        
-        select_columns = [col.strip() for col in match.group(1).split(",")]
-        left_table = match.group(2)
-        right_table = match.group(3)
-        join_condition = match.group(4)
-        where_clause = match.group(5)
-        order_by = match.group(6)
-        limit = int(match.group(7)) if match.group(7) else None
-        offset = int(match.group(8)) if match.group(8) else 0
-        
-        # Parse join condition
-        join_parts = join_condition.split("=")
-        left_col = join_parts[0].strip().split(".")[1]
-        right_col = join_parts[1].strip().split(".")[1]
-        
-        # Parse WHERE clause if present
-        where_func = None
-        if where_clause:
-            where_func = parse_where_clause(where_clause, select_columns)
-        
-        # Parse ORDER BY clause if present
-        order_by_func = None
-        if order_by:
-            order_by_func = parse_order_by_clause(order_by, select_columns)
-        
-        results = join_tables(
-            current_db,
-            left_table,
-            right_table,
-            left_col,
-            right_col,
-            select_columns,
-            where_func,
-            order_by_func,
-            limit,
-            offset
-        )
-        
-        print_results(results, select_columns)
 
     elif match := re.match(
         r"UPDATE\s+(\w+)\s+SET\s+(.+?)(?:\s+WHERE\s+(.+?))?(?:\s+RETURNING\s+(.+))?$", 
