@@ -324,84 +324,111 @@ def parse_command(command):
 
 def parse_where_clause(where_clause, columns):
     """Parse WHERE clause into a function that can be used to filter rows."""
-    # Split into conditions (handling AND/OR)
-    conditions = []
-    current_condition = []
-    
-    for token in where_clause.split():
-        if token.upper() in ("AND", "OR"):
-            if current_condition:
-                conditions.append((" ".join(current_condition), token.upper()))
-                current_condition = []
-        else:
-            current_condition.append(token)
-    
-    if current_condition:
-        conditions.append((" ".join(current_condition), None))
-    
-    def where_func(row):
-        result = None
-        for condition, operator in conditions:
-            # Parse condition
-            parts = condition.split()
-            col_name = parts[0]
-            op = parts[1].upper()
-            value = " ".join(parts[2:]).strip("'\"").lower() if len(parts) > 2 else None
-            
-            # Get column index
-            try:
-                col_idx = next(i for i, c in enumerate(columns) if c == col_name)
-            except StopIteration:
-                print(f"Error: Column '{col_name}' not found in table.")
-                return False
-            
-            # Compare values
-            row_value = row[col_idx]
-            
-            # Handle NULL values
-            if row_value is None:
-                if op == "IS NULL":
-                    condition_result = True
-                elif op == "IS NOT NULL":
-                    condition_result = False
-                else:
-                    condition_result = False
-            else:
-                row_value_str = str(row_value).lower()
-                if op == "=":
-                    condition_result = row_value_str == value
-                elif op == "!=":
-                    condition_result = row_value_str != value
-                elif op == ">":
-                    condition_result = str(row_value) > value
-                elif op == "<":
-                    condition_result = str(row_value) < value
-                elif op == ">=":
-                    condition_result = str(row_value) >= value
-                elif op == "<=":
-                    condition_result = str(row_value) <= value
-                elif op == "LIKE":
-                    # Convert SQL LIKE pattern to regex
-                    pattern = value.replace("%", ".*").replace("_", ".")
-                    condition_result = bool(re.match(f"^{pattern}$", row_value_str, re.IGNORECASE))
-                elif op == "IN":
-                    values = value.strip("()").split(",")
-                    condition_result = row_value_str in [v.strip("'\"").lower() for v in values]
-                else:
-                    print(f"Error: Unknown operator '{op}'")
-                    return False
-            
-            # Combine with previous result
-            if result is None:
-                result = condition_result
-            elif operator == "AND":
-                result = result and condition_result
-            elif operator == "OR":
-                result = result or condition_result
+    try:
+        # Split into conditions (handling AND/OR)
+        conditions = []
+        current_condition = []
         
-        return result
-    
-    return where_func
+        for token in where_clause.split():
+            if token.upper() in ("AND", "OR"):
+                if current_condition:
+                    conditions.append((" ".join(current_condition), token.upper()))
+                    current_condition = []
+            else:
+                current_condition.append(token)
+        
+        if current_condition:
+            conditions.append((" ".join(current_condition), None))
+        
+        def where_func(row):
+            result = None
+            for condition, operator in conditions:
+                # Parse condition
+                parts = condition.split()
+                if len(parts) < 2:
+                    print(f"Error: Invalid condition format: {condition}")
+                    return False
+                    
+                col_name = parts[0]
+                # Handle IS NULL and IS NOT NULL operators
+                if len(parts) >= 3 and parts[1].upper() == "IS":
+                    if len(parts) == 3 and parts[2].upper() == "NULL":
+                        op = "IS NULL"
+                    elif len(parts) == 4 and parts[2].upper() == "NOT" and parts[3].upper() == "NULL":
+                        op = "IS NOT NULL"
+                    else:
+                        print(f"Error: Invalid IS NULL condition: {condition}")
+                        return False
+                    value = None
+                else:
+                    op = parts[1].upper()
+                    value = " ".join(parts[2:]).strip("'\"") if len(parts) > 2 else None
+                
+                # Get column index
+                try:
+                    col_idx = next(i for i, c in enumerate(columns) if c == col_name)
+                except StopIteration:
+                    print(f"Error: Column '{col_name}' not found in table.")
+                    return False
+                
+                # Compare values
+                row_value = row[col_idx]
+                
+                # Handle NULL values
+                if row_value is None:
+                    if op == "IS NULL":
+                        condition_result = True
+                    elif op == "IS NOT NULL":
+                        condition_result = False
+                    else:
+                        condition_result = False
+                else:
+                    if op == "IS NULL":
+                        condition_result = False
+                    elif op == "IS NOT NULL":
+                        condition_result = True
+                    else:
+                        # Convert both values to strings for comparison
+                        row_value_str = str(row_value).lower()
+                        value_str = str(value).lower()
+                        
+                        if op == "=":
+                            condition_result = row_value_str == value_str
+                        elif op == "!=":
+                            condition_result = row_value_str != value_str
+                        elif op == ">":
+                            condition_result = str(row_value) > value
+                        elif op == "<":
+                            condition_result = str(row_value) < value
+                        elif op == ">=":
+                            condition_result = str(row_value) >= value
+                        elif op == "<=":
+                            condition_result = str(row_value) <= value
+                        elif op == "LIKE":
+                            # Convert SQL LIKE pattern to regex
+                            pattern = value.replace("%", ".*").replace("_", ".")
+                            condition_result = bool(re.match(f"^{pattern}$", row_value_str, re.IGNORECASE))
+                        elif op == "IN":
+                            values = value.strip("()").split(",")
+                            condition_result = row_value_str in [v.strip("'\"").lower() for v in values]
+                        else:
+                            print(f"Error: Unknown operator '{op}'")
+                            return False
+                
+                # Combine with previous result
+                if result is None:
+                    result = condition_result
+                elif operator == "AND":
+                    result = result and condition_result
+                elif operator == "OR":
+                    result = result or condition_result
+            
+            return result
+        
+        return where_func
+    except Exception as e:
+        print(f"Error parsing WHERE clause: {str(e)}")
+        return None
 
 def parse_order_by_clause(order_by, columns):
     """Parse ORDER BY clause into a function that can be used to sort rows."""
