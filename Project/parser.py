@@ -325,24 +325,28 @@ def parse_command(command):
 def parse_where_clause(where_clause, columns):
     """Parse WHERE clause into a function that can be used to filter rows."""
     try:
-        # Split into conditions (handling AND/OR)
+        # Split into conditions (handling AND/OR/NOT)
         conditions = []
         current_condition = []
+        not_flag = False
         
         for token in where_clause.split():
-            if token.upper() in ("AND", "OR"):
+            if token.upper() == "NOT":
+                not_flag = True
+            elif token.upper() in ("AND", "OR"):
                 if current_condition:
-                    conditions.append((" ".join(current_condition), token.upper()))
+                    conditions.append((" ".join(current_condition), token.upper(), not_flag))
                     current_condition = []
+                    not_flag = False
             else:
                 current_condition.append(token)
         
         if current_condition:
-            conditions.append((" ".join(current_condition), None))
+            conditions.append((" ".join(current_condition), None, not_flag))
         
         def where_func(row):
             result = None
-            for condition, operator in conditions:
+            for condition, operator, is_not in conditions:
                 # Parse condition
                 parts = condition.split()
                 if len(parts) < 2:
@@ -350,16 +354,17 @@ def parse_where_clause(where_clause, columns):
                     return False
                     
                 col_name = parts[0]
-                # Handle IS NULL and IS NOT NULL operators
-                if len(parts) >= 3 and parts[1].upper() == "IS":
-                    if len(parts) == 3 and parts[2].upper() == "NULL":
-                        op = "IS NULL"
-                    elif len(parts) == 4 and parts[2].upper() == "NOT" and parts[3].upper() == "NULL":
-                        op = "IS NOT NULL"
-                    else:
-                        print(f"Error: Invalid IS NULL condition: {condition}")
+                
+                # Handle BETWEEN operator
+                if len(parts) >= 5 and parts[1].upper() == "BETWEEN" and parts[3].upper() == "AND":
+                    try:
+                        start_value = parts[2].strip("'\"")
+                        end_value = parts[4].strip("'\"")
+                        op = "BETWEEN"
+                        value = (start_value, end_value)
+                    except IndexError:
+                        print(f"Error: Invalid BETWEEN syntax: {condition}")
                         return False
-                    value = None
                 else:
                     op = parts[1].upper()
                     value = " ".join(parts[2:]).strip("'\"") if len(parts) > 2 else None
@@ -376,17 +381,28 @@ def parse_where_clause(where_clause, columns):
                 
                 # Handle NULL values
                 if row_value is None:
-                    if op == "IS NULL":
-                        condition_result = True
-                    elif op == "IS NOT NULL":
-                        condition_result = False
-                    else:
-                        condition_result = False
+                    condition_result = False
                 else:
-                    if op == "IS NULL":
-                        condition_result = False
-                    elif op == "IS NOT NULL":
-                        condition_result = True
+                    if op == "BETWEEN":
+                        try:
+                            start_val, end_val = value
+                            # Convert values to appropriate type based on column data type
+                            if isinstance(row_value, (int, float)):
+                                start_val = float(start_val)
+                                end_val = float(end_val)
+                                row_val = float(row_value)
+                            elif isinstance(row_value, datetime.date):
+                                start_val = datetime.strptime(start_val, "%Y-%m-%d").date()
+                                end_val = datetime.strptime(end_val, "%Y-%m-%d").date()
+                                row_val = row_value
+                            else:  # String comparison
+                                row_val = str(row_value).lower()
+                                start_val = str(start_val).lower()
+                                end_val = str(end_val).lower()
+                            condition_result = start_val <= row_val <= end_val
+                        except (ValueError, TypeError) as e:
+                            print(f"Error: Invalid BETWEEN values for {col_name}: {str(e)}")
+                            return False
                     else:
                         # Convert both values to strings for comparison
                         row_value_str = str(row_value).lower()
@@ -414,6 +430,10 @@ def parse_where_clause(where_clause, columns):
                         else:
                             print(f"Error: Unknown operator '{op}'")
                             return False
+                
+                # Apply NOT if specified
+                if is_not:
+                    condition_result = not condition_result
                 
                 # Combine with previous result
                 if result is None:

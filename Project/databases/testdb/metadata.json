@@ -1,0 +1,66 @@
+{
+    "tables": {
+        "employees": {
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "INTEGER",
+                    "is_primary": true,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "name",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "age",
+                    "type": "INTEGER",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "salary",
+                    "type": "FLOAT",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "department",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "hire_date",
+                    "type": "DATE",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "is_active",
+                    "type": "BOOLEAN",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                }
+            ],
+            "primary_key": "id",
+            "foreign_keys": []
+        }
+    }
+}
