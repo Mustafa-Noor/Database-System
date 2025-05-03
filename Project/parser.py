@@ -341,12 +341,22 @@ def parse_command(command):
             set_values = {}
             for set_item in set_clause.split(","):
                 col_name, value = set_item.split("=")
-                set_values[col_name.strip()] = value.strip().strip("'\"")
+                col_name = col_name.strip()
+                value = value.strip().strip("'\"")
+                set_values[col_name] = value
             
             # Parse WHERE clause if present
             where_func = None
             if where_clause:
-                where_func = parse_where_clause(where_clause, [col for col in set_values.keys()])
+                # Get all columns from the table for WHERE clause
+                db = Database(current_db)
+                if table_name not in db.tables:
+                    print(f"Error: Table '{table_name}' does not exist.")
+                    return
+                
+                table = db.tables[table_name]
+                all_columns = [col.name for col in table.columns]
+                where_func = parse_where_clause(where_clause, all_columns)
             
             # Parse RETURNING clause if present
             returning_columns = None

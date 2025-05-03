@@ -683,52 +683,75 @@ def update_table(db_name, table_name, set_values, where=None, returning_columns=
     # Update rows
     temp_file = os.path.join(table_path, "temp.bin")
     updated_rows = []
+    old_values = []  # Store old values for transaction rollback
     
     with open(data_file, "rb") as f_in, open(temp_file, "wb") as f_out:
         while True:
-            row = []
-            for col in table.columns:
-                if col.data_type == "INTEGER":
-                    value = struct.unpack("i", f_in.read(4))[0]
-                elif col.data_type == "FLOAT":
-                    value = struct.unpack("f", f_in.read(4))[0]
-                elif col.data_type == "BOOLEAN":
-                    value = struct.unpack("?", f_in.read(1))[0]
-                elif col.data_type == "DATE":
-                    value = datetime.strptime(f_in.read(10).decode(), "%Y-%m-%d").date()
-                else:  # STRING
-                    value = f_in.read(20).decode().rstrip('\x00')
-                row.append(value)
+            try:
+                row = []
+                row_start = f_in.tell()
+                for col in table.columns:
+                    if col.data_type == "INTEGER":
+                        value = struct.unpack("i", f_in.read(4))[0]
+                    elif col.data_type == "FLOAT":
+                        value = struct.unpack("f", f_in.read(4))[0]
+                    elif col.data_type == "BOOLEAN":
+                        value = struct.unpack("?", f_in.read(1))[0]
+                    elif col.data_type == "DATE":
+                        date_str = f_in.read(10).decode()
+                        value = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str.strip() else None
+                    else:  # STRING
+                        value = f_in.read(20).decode().rstrip('\x00')
+                        value = None if not value.strip() else value
+                    row.append(value)
 
-            if not row[0]:  # End of file
-                break
+                if not row:  # End of file
+                    break
 
-            # Update row if it matches WHERE clause
-            if where is None or where(row):
-                for col_name, new_value in set_values.items():
-                    col_idx = next(i for i, c in enumerate(table.columns) if c.name == col_name)
-                    row[col_idx] = new_value
-                
-                # Store updated row if RETURNING is specified
-                if returning_columns:
-                    selected_row = []
-                    for col_name in returning_columns:
+                # Update row if it matches WHERE clause
+                if where is None or where(row):
+                    # Store old values for rollback
+                    old_values.append(row.copy())
+                    
+                    # Update the row
+                    for col_name, new_value in set_values.items():
                         col_idx = next(i for i, c in enumerate(table.columns) if c.name == col_name)
-                        selected_row.append(row[col_idx])
-                    updated_rows.append(selected_row)
+                        # Convert new value to appropriate type
+                        if table.columns[col_idx].data_type == "INTEGER":
+                            new_value = int(new_value)
+                        elif table.columns[col_idx].data_type == "FLOAT":
+                            new_value = float(new_value)
+                        elif table.columns[col_idx].data_type == "BOOLEAN":
+                            new_value = bool(new_value)
+                        elif table.columns[col_idx].data_type == "DATE":
+                            new_value = datetime.strptime(new_value, "%Y-%m-%d").date()
+                        row[col_idx] = new_value
+                    
+                    # Store updated row if RETURNING is specified
+                    if returning_columns:
+                        selected_row = []
+                        for col_name in returning_columns:
+                            col_idx = next(i for i, c in enumerate(table.columns) if c.name == col_name)
+                            selected_row.append(row[col_idx])
+                        updated_rows.append(selected_row)
 
-            # Write row to temp file
-            for col, value in zip(table.columns, row):
-                if col.data_type == "INTEGER":
-                    f_out.write(struct.pack("i", value))
-                elif col.data_type == "FLOAT":
-                    f_out.write(struct.pack("f", value))
-                elif col.data_type == "BOOLEAN":
-                    f_out.write(struct.pack("?", value))
-                elif col.data_type == "DATE":
-                    f_out.write(value.isoformat().encode())
-                else:  # STRING
-                    f_out.write(value.encode().ljust(20, b'\x00'))
+                # Write row to temp file
+                for col, value in zip(table.columns, row):
+                    if value is None:
+                        f_out.write(b"NULL")
+                    elif col.data_type == "INTEGER":
+                        f_out.write(struct.pack("i", value))
+                    elif col.data_type == "FLOAT":
+                        f_out.write(struct.pack("f", value))
+                    elif col.data_type == "BOOLEAN":
+                        f_out.write(struct.pack("?", value))
+                    elif col.data_type == "DATE":
+                        f_out.write(value.isoformat().encode())
+                    else:  # STRING
+                        f_out.write(str(value).encode().ljust(20, b'\x00'))
+
+            except (struct.error, ValueError, EOFError):
+                break
 
     # Replace original file with temp file
     os.replace(temp_file, data_file)
