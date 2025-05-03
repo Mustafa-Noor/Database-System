@@ -1,29 +1,76 @@
 import re
 from database_manager import *
+from transaction_manager import TransactionManager
 
 current_db = None  # Tracks the currently active database
+current_transaction = None  # Tracks the current transaction
+transaction_manager = None  # Global transaction manager instance
 
 def parse_command(command):
     """Parses and executes user commands related to database operations."""
-    global current_db
+    global current_db, current_transaction, transaction_manager
 
     command = command.strip()
 
+    # Transaction management commands
+    if command.upper() == "BEGIN TRANSACTION":
+        if not current_db:
+            print("Error: No database selected. Use 'USE DATABASE db_name'.")
+            return
+        if current_transaction:
+            print("Error: Transaction already in progress.")
+            return
+        if transaction_manager is None:
+            transaction_manager = TransactionManager(current_db)
+        current_transaction = transaction_manager.begin_transaction()
+        print(f"Transaction {current_transaction} started.")
+
+    elif command.upper() == "COMMIT":
+        if not current_transaction:
+            print("Error: No transaction in progress.")
+            return
+        if transaction_manager is None:
+            print("Error: No transaction manager available.")
+            return
+        try:
+            transaction_manager.commit_transaction(current_transaction)
+            print(f"Transaction {current_transaction} committed.")
+            current_transaction = None
+        except Exception as e:
+            print(f"Error committing transaction: {str(e)}")
+
+    elif command.upper() == "ROLLBACK":
+        if not current_transaction:
+            print("Error: No transaction in progress.")
+            return
+        if transaction_manager is None:
+            print("Error: No transaction manager available.")
+            return
+        try:
+            transaction_manager.abort_transaction(current_transaction)
+            print(f"Transaction {current_transaction} rolled back.")
+            current_transaction = None
+        except Exception as e:
+            print(f"Error rolling back transaction: {str(e)}")
+
     # Database management commands
-    if match := re.match(r"CREATE DATABASE (\w+)", command, re.IGNORECASE):
+    elif match := re.match(r"CREATE DATABASE (\w+)", command, re.IGNORECASE):
         db_name = match.group(1)
         create_database(db_name)
         current_db = db_name
+        transaction_manager = None  # Reset transaction manager for new database
 
     elif match := re.match(r"DROP DATABASE (\w+)", command, re.IGNORECASE):
         db_name = match.group(1)
         drop_database(db_name)
         if current_db == db_name:
             current_db = None
+            transaction_manager = None  # Reset transaction manager
 
     elif match := re.match(r"USE\s+(?:DATABASE\s+)?(\w+)", command, re.IGNORECASE):
         db_name = match.group(1)
         current_db = db_name
+        transaction_manager = None  # Reset transaction manager for new database
         print(f"Switched to database '{db_name}'.")
 
     elif command.upper() == "SHOW DATABASES":
@@ -115,7 +162,29 @@ def parse_command(command):
             return
         table_name = match.group(1)
         values = [v.strip().strip("'\"") for v in match.group(2).split(",")]
-        insert_into_table(current_db, table_name, values)
+        
+        # Initialize transaction manager if needed
+        if transaction_manager is None:
+            transaction_manager = TransactionManager(current_db)
+        
+        # Acquire lock if in transaction
+        if current_transaction:
+            if not transaction_manager.acquire_lock(current_transaction, f"{table_name}", "EXCLUSIVE"):
+                print("Error: Could not acquire lock for table.")
+                return
+        
+        try:
+            result = insert_into_table(current_db, table_name, values)
+            if result and current_transaction:
+                # Store the change for potential rollback
+                transaction_manager.transactions[current_transaction].changes[table_name] = {
+                    "type": "INSERT",
+                    "values": values
+                }
+        finally:
+            # Release lock if in transaction
+            if current_transaction:
+                transaction_manager.release_lock(current_transaction, f"{table_name}")
 
     # Enhanced SELECT query support
     elif match := re.match(
@@ -257,32 +326,56 @@ def parse_command(command):
         where_clause = match.group(3)
         returning_clause = match.group(4)
         
-        # Parse SET clause
-        set_values = {}
-        for set_item in set_clause.split(","):
-            col_name, value = set_item.split("=")
-            set_values[col_name.strip()] = value.strip().strip("'\"")
+        # Initialize transaction manager if needed
+        if transaction_manager is None:
+            transaction_manager = TransactionManager(current_db)
         
-        # Parse WHERE clause if present
-        where_func = None
-        if where_clause:
-            where_func = parse_where_clause(where_clause, [col for col in set_values.keys()])
+        # Acquire lock if in transaction
+        if current_transaction:
+            if not transaction_manager.acquire_lock(current_transaction, f"{table_name}", "EXCLUSIVE"):
+                print("Error: Could not acquire lock for table.")
+                return
         
-        # Parse RETURNING clause if present
-        returning_columns = None
-        if returning_clause:
-            returning_columns = [col.strip() for col in returning_clause.split(",")]
-        
-        results = update_table(
-            current_db,
-            table_name,
-            set_values,
-            where_func,
-            returning_columns
-        )
-        
-        if returning_columns and results:
-            print_results(results, returning_columns)
+        try:
+            # Parse SET clause
+            set_values = {}
+            for set_item in set_clause.split(","):
+                col_name, value = set_item.split("=")
+                set_values[col_name.strip()] = value.strip().strip("'\"")
+            
+            # Parse WHERE clause if present
+            where_func = None
+            if where_clause:
+                where_func = parse_where_clause(where_clause, [col for col in set_values.keys()])
+            
+            # Parse RETURNING clause if present
+            returning_columns = None
+            if returning_clause:
+                returning_columns = [col.strip() for col in returning_clause.split(",")]
+            
+            # Store old values for rollback if in transaction
+            if current_transaction:
+                old_values = select_from_table(current_db, table_name, None, where_func)
+                transaction_manager.transactions[current_transaction].changes[table_name] = {
+                    "type": "UPDATE",
+                    "old_values": old_values,
+                    "new_values": set_values
+                }
+            
+            results = update_table(
+                current_db,
+                table_name,
+                set_values,
+                where_func,
+                returning_columns
+            )
+            
+            if returning_columns and results:
+                print_results(results, returning_columns)
+        finally:
+            # Release lock if in transaction
+            if current_transaction:
+                transaction_manager.release_lock(current_transaction, f"{table_name}")
 
     elif match := re.match(
         r"DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+RETURNING\s+(.+))?$", 
@@ -296,25 +389,48 @@ def parse_command(command):
         where_clause = match.group(2)
         returning_clause = match.group(3)
         
-        # Parse WHERE clause if present
-        where_func = None
-        if where_clause:
-            where_func = parse_where_clause(where_clause, ["*"])
+        # Initialize transaction manager if needed
+        if transaction_manager is None:
+            transaction_manager = TransactionManager(current_db)
         
-        # Parse RETURNING clause if present
-        returning_columns = None
-        if returning_clause:
-            returning_columns = [col.strip() for col in returning_clause.split(",")]
+        # Acquire lock if in transaction
+        if current_transaction:
+            if not transaction_manager.acquire_lock(current_transaction, f"{table_name}", "EXCLUSIVE"):
+                print("Error: Could not acquire lock for table.")
+                return
         
-        results = delete_from_table(
-            current_db,
-            table_name,
-            where_func,
-            returning_columns
-        )
-        
-        if returning_columns and results:
-            print_results(results, returning_columns)
+        try:
+            # Parse WHERE clause if present
+            where_func = None
+            if where_clause:
+                where_func = parse_where_clause(where_clause, ["*"])
+            
+            # Parse RETURNING clause if present
+            returning_columns = None
+            if returning_clause:
+                returning_columns = [col.strip() for col in returning_clause.split(",")]
+            
+            # Store deleted rows for rollback if in transaction
+            if current_transaction:
+                deleted_rows = select_from_table(current_db, table_name, None, where_func)
+                transaction_manager.transactions[current_transaction].changes[table_name] = {
+                    "type": "DELETE",
+                    "rows": deleted_rows
+                }
+            
+            results = delete_from_table(
+                current_db,
+                table_name,
+                where_func,
+                returning_columns
+            )
+            
+            if returning_columns and results:
+                print_results(results, returning_columns)
+        finally:
+            # Release lock if in transaction
+            if current_transaction:
+                transaction_manager.release_lock(current_transaction, f"{table_name}")
 
     elif command.upper() == "HELP":
         print_help()
