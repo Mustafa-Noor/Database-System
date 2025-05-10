@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 from threading import Lock
 import struct
+from database_manager import Database, BTreeIndex
 
 class Transaction:
     def __init__(self, transaction_id, start_time):
@@ -171,14 +172,33 @@ class TransactionManager:
         elif changes["type"] == "UPDATE":
             # For UPDATE, we need to restore the old values
             with open(data_file, "r+b") as f:
-                for position, old_data in changes["old_values"].items():
-                    f.seek(int(position))
-                    f.write(old_data)
+                for old_row in changes["old_values"]:
+                    # Write each value in the old row
+                    for col, value in zip(self._get_table_columns(table_name), old_row):
+                        if value is None:
+                            f.write(b"NULL")
+                        elif col.data_type == "INTEGER":
+                            f.write(struct.pack("i", value))
+                        elif col.data_type == "FLOAT":
+                            f.write(struct.pack("f", value))
+                        elif col.data_type == "BOOLEAN":
+                            f.write(struct.pack("?", value))
+                        elif col.data_type == "DATE":
+                            f.write(value.isoformat().encode())
+                        else:  # STRING
+                            f.write(str(value).encode().ljust(20, b'\x00'))
         elif changes["type"] == "DELETE":
             # For DELETE, we need to restore the deleted rows
             with open(data_file, "ab") as f:
                 for row_data in changes["rows"]:
                     f.write(row_data)
+
+    def _get_table_columns(self, table_name):
+        """Get the columns for a table."""
+        db = Database(self.db_name)
+        if table_name not in db.tables:
+            raise ValueError(f"Table '{table_name}' does not exist")
+        return db.tables[table_name].columns
 
     def _rollback_changes(self, table_name, changes):
         """Rollback changes to a table."""
@@ -230,15 +250,40 @@ class TransactionManager:
         elif changes["type"] == "UPDATE":
             # For UPDATE, we need to restore the old values
             with open(data_file, "r+b") as f:
-                for position, old_data in changes["old_values"].items():
-                    f.seek(int(position))
-                    f.write(old_data)
+                for old_row in changes["old_values"]:
+                    # Write each value in the old row
+                    for col, value in zip(self._get_table_columns(table_name), old_row):
+                        if value is None:
+                            f.write(b"NULL")
+                        elif col.data_type == "INTEGER":
+                            f.write(struct.pack("i", value))
+                        elif col.data_type == "FLOAT":
+                            f.write(struct.pack("f", value))
+                        elif col.data_type == "BOOLEAN":
+                            f.write(struct.pack("?", value))
+                        elif col.data_type == "DATE":
+                            f.write(value.isoformat().encode())
+                        else:  # STRING
+                            f.write(str(value).encode().ljust(20, b'\x00'))
         
         elif changes["type"] == "DELETE":
             # For DELETE, we need to restore the deleted rows
             with open(data_file, "ab") as f:
-                for row_data in changes["rows"]:
-                    f.write(row_data)
+                for row in changes["rows"]:
+                    # Convert each value in the row to bytes
+                    for col, value in zip(self._get_table_columns(table_name), row):
+                        if value is None:
+                            f.write(b"NULL")
+                        elif col.data_type == "INTEGER":
+                            f.write(struct.pack("i", value))
+                        elif col.data_type == "FLOAT":
+                            f.write(struct.pack("f", value))
+                        elif col.data_type == "BOOLEAN":
+                            f.write(struct.pack("?", value))
+                        elif col.data_type == "DATE":
+                            f.write(value.isoformat().encode())
+                        else:  # STRING
+                            f.write(str(value).encode().ljust(20, b'\x00'))
 
     def create_checkpoint(self):
         """Create a checkpoint of the current database state."""

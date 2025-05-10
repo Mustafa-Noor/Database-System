@@ -1,0 +1,37 @@
+[
+    {
+        "timestamp": "2025-05-11T00:32:21.647288",
+        "action": "BEGIN",
+        "transaction_id": 1
+    },
+    {
+        "timestamp": "2025-05-11T00:35:52.295626",
+        "action": "BEGIN",
+        "transaction_id": 1
+    },
+    {
+        "timestamp": "2025-05-11T00:37:44.462167",
+        "action": "BEGIN",
+        "transaction_id": 1
+    },
+    {
+        "timestamp": "2025-05-11T00:38:12.916924",
+        "action": "COMMIT",
+        "transaction_id": 1
+    },
+    {
+        "timestamp": "2025-05-11T00:38:27.615159",
+        "action": "BEGIN",
+        "transaction_id": 2
+    },
+    {
+        "timestamp": "2025-05-11T00:40:21.456992",
+        "action": "BEGIN",
+        "transaction_id": 1
+    },
+    {
+        "timestamp": "2025-05-11T00:40:51.348712",
+        "action": "ABORT",
+        "transaction_id": 1
+    }
+]

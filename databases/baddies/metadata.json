@@ -1,0 +1,218 @@
+{
+    "tables": {
+        "bitches": {
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "INTEGER",
+                    "is_primary": true,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "age",
+                    "type": "INTEGER",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "hair",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                }
+            ],
+            "primary_key": "id",
+            "foreign_keys": []
+        },
+        "users": {
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "INTEGER",
+                    "is_primary": true,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "username",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": true
+                },
+                {
+                    "name": "email",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "age",
+                    "type": "INTEGER",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "is_active",
+                    "type": "BOOLEAN",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": "true",
+                    "is_unique": false
+                },
+                {
+                    "name": "created_at",
+                    "type": "DATE",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                }
+            ],
+            "primary_key": "id",
+            "foreign_keys": []
+        },
+        "products": {
+            "columns": [
+                {
+                    "name": "product_id",
+                    "type": "INTEGER",
+                    "is_primary": true,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "name",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "price",
+                    "type": "FLOAT",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "category",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                }
+            ],
+            "primary_key": "product_id",
+            "foreign_keys": []
+        },
+        "order_items": {
+            "columns": [
+                {
+                    "name": "item_id",
+                    "type": "INTEGER",
+                    "is_primary": true,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "order_id",
+                    "type": "INTEGER",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "product_id",
+                    "type": "INTEGER",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "quantity",
+                    "type": "INTEGER",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "price",
+                    "type": "FLOAT",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                }
+            ],
+            "primary_key": "item_id",
+            "foreign_keys": []
+        },
+        "orders": {
+            "columns": [
+                {
+                    "name": "order_id",
+                    "type": "INTEGER",
+                    "is_primary": true,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "user_id",
+                    "type": "INTEGER",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "amount",
+                    "type": "FLOAT",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "order_date",
+                    "type": "DATE",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "status",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                }
+            ],
+            "primary_key": "order_id",
+            "foreign_keys": []
+        }
+    }
+}

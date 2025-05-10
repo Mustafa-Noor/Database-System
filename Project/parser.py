@@ -413,7 +413,15 @@ def parse_command(command):
             # Parse WHERE clause if present
             where_func = None
             if where_clause:
-                where_func = parse_where_clause(where_clause, ["*"])
+                # Get all columns from the table for WHERE clause
+                db = Database(current_db)
+                if table_name not in db.tables:
+                    print(f"Error: Table '{table_name}' does not exist.")
+                    return
+                
+                table = db.tables[table_name]
+                all_columns = [col.name for col in table.columns]
+                where_func = parse_where_clause(where_clause, all_columns)
             
             # Parse RETURNING clause if present
             returning_columns = None
