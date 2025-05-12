@@ -330,7 +330,35 @@ def parse_command(command, active_user=None, db_name=None):
         return {"results": results, "columns": select_columns}
 
     elif command.upper() == "HELP":
-        return show_help()
+        commands = {
+            "Database Management": [
+                "CREATE DATABASE <name>",
+                "DROP DATABASE <name>",
+                "USE DATABASE <name>",
+                "SHOW DATABASES"
+            ],
+            "Table Management": [
+                "CREATE TABLE <name> (col1 TYPE [PRIMARY KEY] [NOT NULL] [UNIQUE] [DEFAULT value], col2 TYPE [FOREIGN KEY REFERENCES table(col) [ON DELETE action] [ON UPDATE action]], ...)",
+                "DROP TABLE <name>",
+                "SHOW TABLES",
+                "DESCRIBE TABLE <name>"
+            ],
+            "Data Manipulation": [
+                "INSERT INTO <table> VALUES (value1, value2, ...)",
+                "SELECT col1, col2, ... FROM <table> [WHERE condition] [ORDER BY col [ASC|DESC]] [LIMIT n] [OFFSET n]",
+                "SELECT col1, col2, ... FROM table1 [INNER|LEFT|RIGHT|FULL] JOIN table2 ON table1.col = table2.col [WHERE condition] [ORDER BY col [ASC|DESC]] [LIMIT n] [OFFSET n]",
+                "UPDATE <table> SET col1 = value1, col2 = value2, ... [WHERE condition] [RETURNING col1, col2, ...]",
+                "DELETE FROM <table> [WHERE condition] [RETURNING col1, col2, ...]"
+            ]
+        }
+        
+        results = []
+        for category, cmds in commands.items():
+            results.append([category, ""])  # Add category as a row
+            for cmd in cmds:
+                results.append(["", cmd])  # Add command as a row with empty category
+        
+        return {"results": results, "columns": ["Category", "Command"]}
 
     else:
         return "Invalid command. Type 'HELP' for available commands."
