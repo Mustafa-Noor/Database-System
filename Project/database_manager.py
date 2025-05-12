@@ -174,15 +174,31 @@ def create_database(db_name, owner=None):
 
 def drop_database(db_name):
     """Delete a database."""
-    db_path = os.path.join(BASE_DIR, db_name)
-    if not os.path.exists(db_path):
-        print(f"Error: Database '{db_name}' does not exist.")
-        return False
+    try:
+        # First check if database exists in the filesystem
+        db_path = os.path.join(BASE_DIR, db_name)
+        if not os.path.exists(db_path):
+            print(f"Error: Database '{db_name}' does not exist.")
+            return False
 
-    import shutil
-    shutil.rmtree(db_path)
-    print(f"Database '{db_name}' dropped successfully.")
-    return True
+        # Clean up ownership and sharing records first
+        from user_manager import get_db_manager
+        _, _, _, select_from_table, _, _, delete_from_table = get_db_manager()
+        
+        # Delete from database_owners table
+        delete_from_table("user_database", "database_owners", lambda row: row[0] == db_name)
+        
+        # Delete from database_shares table
+        delete_from_table("user_database", "database_shares", lambda row: row[0] == db_name)
+        
+        # Then remove the physical database directory
+        import shutil
+        shutil.rmtree(db_path)
+        print(f"Database '{db_name}' dropped successfully.")
+        return True
+    except Exception as e:
+        print(f"Error dropping database: {str(e)}")
+        return False
 
 def list_databases():
     """List all available databases by checking the data directory."""

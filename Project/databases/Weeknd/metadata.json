@@ -1,0 +1,96 @@
+{
+    "tables": {
+        "departments": {
+            "columns": [
+                {
+                    "name": "dept_id",
+                    "type": "INTEGER",
+                    "is_primary": true,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "dept_name",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                }
+            ],
+            "primary_key": "dept_id",
+            "foreign_keys": []
+        },
+        "employees": {
+            "columns": [
+                {
+                    "name": "emp_id",
+                    "type": "INTEGER",
+                    "is_primary": true,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "first_name",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "last_name",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "email",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": true
+                },
+                {
+                    "name": "salary",
+                    "type": "FLOAT",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "hire_date",
+                    "type": "DATE",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "dept_id",
+                    "type": "INTEGER",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                }
+            ],
+            "primary_key": "emp_id",
+            "foreign_keys": [
+                {
+                    "column": "dept_id",
+                    "ref_table": "departments",
+                    "ref_column": "dept_id",
+                    "on_delete": "RESTRICT",
+                    "on_update": "RESTRICT"
+                }
+            ]
+        }
+    }
+}

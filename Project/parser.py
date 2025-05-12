@@ -66,11 +66,14 @@ def parse_command(command, active_user=None, db_name=None):
         db_name_drop = match.group(1)
         if not active_user or not user_has_access_to_db(active_user["username"], db_name_drop):
             return "Access denied: You do not own or have access to this database."
-        result = drop_database(db_name_drop)
-        if result:
-            return f"Database '{db_name_drop}' dropped successfully"
-        else:
-            return f"Failed to drop database '{db_name_drop}'"
+        try:
+            result = drop_database(db_name_drop)
+            if result:
+                return f"Database '{db_name_drop}' dropped successfully"
+            else:
+                return f"Failed to drop database '{db_name_drop}'"
+        except Exception as e:
+            return f"Error dropping database: {str(e)}"
 
     elif match := re.match(r"USE\s+(?:DATABASE\s+)?(\w+)", command, re.IGNORECASE):
         db_name_use = match.group(1)
@@ -83,9 +86,9 @@ def parse_command(command, active_user=None, db_name=None):
             return "Please sign in first!"
         user_dbs = get_user_databases(active_user["username"])
         if not user_dbs:
-            return "No databases found for you."
+            return {"results": [], "columns": ["Database", "Type"]}
         else:
-            return {"databases": user_dbs}
+            return {"results": [[db["name"], db["type"]] for db in user_dbs], "columns": ["Database", "Type"]}
 
     # Table management commands
     elif match := re.match(
@@ -145,8 +148,8 @@ def parse_command(command, active_user=None, db_name=None):
             return "Access denied: You do not own or have access to this database."
         db = Database(db_name)
         if not db.tables:
-            return "No tables found."
-        return {"tables": list(db.tables.keys())}
+            return {"results": [], "columns": ["Table"]}
+        return {"results": [[table] for table in db.tables.keys()], "columns": ["Table"]}
 
     elif match := re.match(r"DESCRIBE TABLE (\w+)", command, re.IGNORECASE):
         if not db_name or not active_user or not user_has_access_to_db(active_user["username"], db_name):
@@ -161,14 +164,8 @@ def parse_command(command, active_user=None, db_name=None):
             key_type = "PRI" if col.is_primary else "UNI" if col.is_unique else ""
             nullable = "NO" if not col.is_nullable else "YES"
             default = str(col.default) if col.default is not None else ""
-            desc.append({
-                "name": col.name,
-                "type": col.data_type,
-                "nullable": nullable,
-                "key": key_type,
-                "default": default
-            })
-        return {"description": desc}
+            desc.append([col.name, col.data_type, nullable, key_type, default])
+        return {"results": desc, "columns": ["Field", "Type", "Null", "Key", "Default"]}
 
     # Data manipulation commands
     elif match := re.match(
