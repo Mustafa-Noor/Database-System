@@ -97,6 +97,36 @@
             ],
             "primary_key": null,
             "foreign_keys": []
+        },
+        "sessions": {
+            "columns": [
+                {
+                    "name": "username",
+                    "type": "STRING",
+                    "is_primary": true,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "session_token",
+                    "type": "STRING",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "created_at",
+                    "type": "DATE",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                }
+            ],
+            "primary_key": null,
+            "foreign_keys": []
         }
     }
 }

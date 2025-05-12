@@ -1,497 +1,342 @@
 import re
 from database_manager import *
 from transaction_manager import TransactionManager
-from user_manager import get_user_databases, user_has_access_to_db
+from user_manager import get_user_databases, user_has_access_to_db, verify_session
 
 current_db = None  # Tracks the currently active database
 current_transaction = None  # Tracks the current transaction
 transaction_manager = None  # Global transaction manager instance
+user_transactions = {}  # {username: {"db": ..., "transaction_id": ..., "manager": ...}}
 
-def parse_command(command, active_user=None):
-    """Parses and executes user commands related to database operations."""
-    global current_db, current_transaction, transaction_manager
-
+def parse_command(command, active_user=None, db_name=None):
+    """Parses and executes user commands related to database operations (stateless, for web/API)."""
     command = command.strip()
 
     # Check if user is logged in for all database operations
     if not active_user and command.upper() not in ["HELP", "EXIT"]:
-        print("Please sign in first!")
-        return False
+        return "Please sign in first!"
 
-    # Transaction management commands
+    # Transaction management commands (session-based for web API)
     if command.upper() == "BEGIN TRANSACTION":
-        if not current_db or not active_user or not user_has_access_to_db(active_user["username"], current_db):
-            print("Access denied: You do not own or have access to this database.")
-            return False
-        if current_transaction:
-            print("Error: Transaction already in progress.")
-            return False
-        if transaction_manager is None:
-            transaction_manager = TransactionManager(current_db)
-        current_transaction = transaction_manager.begin_transaction()
-        print(f"Transaction {current_transaction} started.")
-        return True
-
+        if not db_name or not active_user or not user_has_access_to_db(active_user["username"], db_name):
+            return "Access denied: You do not own or have access to this database."
+        username = active_user["username"]
+        if username in user_transactions and user_transactions[username]["transaction_id"] is not None:
+            return "Error: Transaction already in progress."
+        manager = TransactionManager(db_name)
+        transaction_id = manager.begin_transaction()
+        user_transactions[username] = {"db": db_name, "transaction_id": transaction_id, "manager": manager}
+        return f"Transaction {transaction_id} started."
     elif command.upper() == "COMMIT":
-        if not current_transaction:
-            print("Error: No transaction in progress.")
-            return False
-        if transaction_manager is None:
-            print("Error: No transaction manager available.")
-            return False
+        username = active_user["username"]
+        if username not in user_transactions or user_transactions[username]["transaction_id"] is None:
+            return "Error: No transaction in progress."
+        manager = user_transactions[username]["manager"]
+        transaction_id = user_transactions[username]["transaction_id"]
         try:
-            transaction_manager.commit_transaction(current_transaction)
-            print(f"Transaction {current_transaction} committed.")
-            current_transaction = None
-            return True
+            manager.commit_transaction(transaction_id)
+            user_transactions[username]["transaction_id"] = None
+            return f"Transaction {transaction_id} committed."
         except Exception as e:
-            print(f"Error committing transaction: {str(e)}")
-            return False
-
+            return f"Error committing transaction: {str(e)}"
     elif command.upper() == "ROLLBACK":
-        if not current_transaction:
-            print("Error: No transaction in progress.")
-            return False
-        if transaction_manager is None:
-            print("Error: No transaction manager available.")
-            return False
+        username = active_user["username"]
+        if username not in user_transactions or user_transactions[username]["transaction_id"] is None:
+            return "Error: No transaction in progress."
+        manager = user_transactions[username]["manager"]
+        transaction_id = user_transactions[username]["transaction_id"]
         try:
-            transaction_manager.abort_transaction(current_transaction)
-            print(f"Transaction {current_transaction} rolled back.")
-            current_transaction = None
-            return True
+            manager.abort_transaction(transaction_id)
+            user_transactions[username]["transaction_id"] = None
+            return f"Transaction {transaction_id} rolled back."
         except Exception as e:
-            print(f"Error rolling back transaction: {str(e)}")
-            return False
+            return f"Error rolling back transaction: {str(e)}"
 
     # Database management commands
     elif match := re.match(r"CREATE DATABASE (\w+)", command, re.IGNORECASE):
-        db_name = match.group(1)
+        db_name_create = match.group(1)
         owner = active_user["username"] if active_user and isinstance(active_user, dict) else None
-        result = create_database(db_name, owner=owner)
+        result = create_database(db_name_create, owner=owner)
         if result:
-            current_db = db_name
-            transaction_manager = None  # Reset transaction manager for new database
-        return result
+            return f"Database '{db_name_create}' created successfully"
+        else:
+            return f"Failed to create database '{db_name_create}'"
 
     elif match := re.match(r"DROP DATABASE (\w+)", command, re.IGNORECASE):
-        db_name = match.group(1)
-        if not active_user or not user_has_access_to_db(active_user["username"], db_name):
-            print("Access denied: You do not own or have access to this database.")
-            return False
-        result = drop_database(db_name)
-        if result and current_db == db_name:
-            current_db = None
-            transaction_manager = None  # Reset transaction manager
-        return result
+        db_name_drop = match.group(1)
+        if not active_user or not user_has_access_to_db(active_user["username"], db_name_drop):
+            return "Access denied: You do not own or have access to this database."
+        result = drop_database(db_name_drop)
+        if result:
+            return f"Database '{db_name_drop}' dropped successfully"
+        else:
+            return f"Failed to drop database '{db_name_drop}'"
 
     elif match := re.match(r"USE\s+(?:DATABASE\s+)?(\w+)", command, re.IGNORECASE):
-        db_name = match.group(1)
-        if not active_user or not user_has_access_to_db(active_user["username"], db_name):
-            print("Access denied: You do not own or have access to this database.")
-            return False
-        current_db = db_name
-        transaction_manager = None  # Reset transaction manager for new database
-        print(f"Switched to database '{db_name}'.")
-        return True
+        db_name_use = match.group(1)
+        if not active_user or not user_has_access_to_db(active_user["username"], db_name_use):
+            return "Access denied: You do not own or have access to this database."
+        return f"Switched to database '{db_name_use}'"
 
     elif command.upper() == "SHOW DATABASES":
         if not active_user or "username" not in active_user:
-            print("Please sign in first!")
-            return False
+            return "Please sign in first!"
         user_dbs = get_user_databases(active_user["username"])
         if not user_dbs:
-            print("No databases found for you.")
-            return False
+            return "No databases found for you."
         else:
-            print("\nYour accessible databases:")
-            for db in user_dbs:
-                print(f"- {db['name']} ({db['type']})")
-            return True
+            return {"databases": user_dbs}
 
     # Table management commands
-    elif match := re.match(r"CREATE TABLE (\w+) \((.+)\)", command, re.IGNORECASE):
-        if not current_db or not active_user or not user_has_access_to_db(active_user["username"], current_db):
-            print("Access denied: You do not own or have access to this database.")
-            return False
-        
+    elif match := re.match(
+        r"CREATE\s+TABLE\s+(\w+)\s*\((.+?)\)\s*;?$",
+        command, re.IGNORECASE | re.DOTALL
+    ):
+        if not db_name or not active_user or not user_has_access_to_db(active_user["username"], db_name):
+            return "Access denied: You do not own or have access to this database."
         table_name = match.group(1)
         columns_def = [col.strip() for col in match.group(2).split(",")]
-        
-        # Parse columns and constraints
         columns = []
         primary_key = None
         foreign_keys = []
         unique_constraints = []
-        
         for col_def in columns_def:
-            # Parse column definition
             col_parts = col_def.split()
-            if not col_parts:  # Skip empty parts
+            if not col_parts:
                 continue
-                
             col_name = col_parts[0]
-            
-            # Check if this is a FOREIGN KEY constraint
             if col_name.upper() == "FOREIGN":
-                # Parse foreign key constraint
                 fk_match = re.search(r"FOREIGN KEY\s*\((\w+)\)\s*REFERENCES\s+(\w+)\s*\((\w+)\)", col_def, re.IGNORECASE)
                 if fk_match:
                     fk_col, ref_table, ref_col = fk_match.groups()
                     fk = ForeignKey(fk_col, ref_table, ref_col)
                     foreign_keys.append(fk)
                 continue
-            
-            # Regular column definition
             col_type = col_parts[1].upper()
-            
-            # Check for PRIMARY KEY
             is_primary = "PRIMARY KEY" in col_def.upper()
             if is_primary:
                 primary_key = col_name
-            
-            # Check for NOT NULL
             is_nullable = "NOT NULL" not in col_def.upper()
-            
-            # Check for UNIQUE
             is_unique = "UNIQUE" in col_def.upper()
             if is_unique:
                 unique_constraints.append(col_name)
-            
-            # Check for DEFAULT
             default_match = re.search(r"DEFAULT\s+(\w+)", col_def, re.IGNORECASE)
             default = default_match.group(1) if default_match else None
-            
-            # Create column object
             column = Column(col_name, col_type, is_primary, is_nullable, default, is_unique)
             columns.append(column)
-        
-        result = create_table(current_db, table_name, columns, primary_key, foreign_keys, unique_constraints)
-        return result
+        result = create_table(db_name, table_name, columns, primary_key, foreign_keys, unique_constraints)
+        if result:
+            return f"Table '{table_name}' created successfully"
+        else:
+            return f"Failed to create table '{table_name}'"
 
     elif match := re.match(r"DROP TABLE (\w+)", command, re.IGNORECASE):
-        if not current_db or not active_user or not user_has_access_to_db(active_user["username"], current_db):
-            print("Access denied: You do not own or have access to this database.")
-            return False
+        if not db_name or not active_user or not user_has_access_to_db(active_user["username"], db_name):
+            return "Access denied: You do not own or have access to this database."
         table_name = match.group(1)
-        result = drop_table(current_db, table_name)
-        return result
+        result = drop_table(db_name, table_name)
+        if result:
+            return f"Table '{table_name}' dropped successfully"
+        else:
+            return f"Failed to drop table '{table_name}'"
 
     elif command.upper() == "SHOW TABLES":
-        if not current_db or not active_user or not user_has_access_to_db(active_user["username"], current_db):
-            print("Access denied: You do not own or have access to this database.")
-            return False
-        result = show_tables(current_db)
-        return result
+        if not db_name or not active_user or not user_has_access_to_db(active_user["username"], db_name):
+            return "Access denied: You do not own or have access to this database."
+        db = Database(db_name)
+        if not db.tables:
+            return "No tables found."
+        return {"tables": list(db.tables.keys())}
 
     elif match := re.match(r"DESCRIBE TABLE (\w+)", command, re.IGNORECASE):
-        if not current_db or not active_user or not user_has_access_to_db(active_user["username"], current_db):
-            print("Access denied: You do not own or have access to this database.")
-            return False
+        if not db_name or not active_user or not user_has_access_to_db(active_user["username"], db_name):
+            return "Access denied: You do not own or have access to this database."
         table_name = match.group(1)
-        result = describe_table(current_db, table_name)
-        return result
+        db = Database(db_name)
+        if table_name not in db.tables:
+            return f"Error: Table '{table_name}' does not exist."
+        table = db.tables[table_name]
+        desc = []
+        for col in table.columns:
+            key_type = "PRI" if col.is_primary else "UNI" if col.is_unique else ""
+            nullable = "NO" if not col.is_nullable else "YES"
+            default = str(col.default) if col.default is not None else ""
+            desc.append({
+                "name": col.name,
+                "type": col.data_type,
+                "nullable": nullable,
+                "key": key_type,
+                "default": default
+            })
+        return {"description": desc}
 
     # Data manipulation commands
-    elif match := re.match(r"INSERT INTO (\w+) VALUES \((.+)\)", command, re.IGNORECASE):
-        if not current_db or not active_user or not user_has_access_to_db(active_user["username"], current_db):
-            print("Access denied: You do not own or have access to this database.")
-            return False
+    elif match := re.match(
+        r"INSERT\s+INTO\s+(\w+)\s+VALUES\s*\((.+?)\)\s*;?$",
+        command, re.IGNORECASE | re.DOTALL
+    ):
+        if not db_name or not active_user or not user_has_access_to_db(active_user["username"], db_name):
+            return "Access denied: You do not own or have access to this database."
         table_name = match.group(1)
         values = [v.strip().strip("'\"") for v in match.group(2).split(",")]
-        
-        # Initialize transaction manager if needed
-        if transaction_manager is None:
-            transaction_manager = TransactionManager(current_db)
-        
-        # Acquire lock if in transaction
-        if current_transaction:
-            if not transaction_manager.acquire_lock(current_transaction, f"{table_name}", "EXCLUSIVE"):
-                print("Error: Could not acquire lock for table.")
-                return False
-        
-        try:
-            result = insert_into_table(current_db, table_name, values)
-            if result and current_transaction:
-                # Store the change for potential rollback
-                transaction_manager.transactions[current_transaction].changes[table_name] = {
-                    "type": "INSERT",
-                    "values": values
-                }
-            return result
-        finally:
-            # Release lock if in transaction
-            if current_transaction:
-                transaction_manager.release_lock(current_transaction, f"{table_name}")
+        result = insert_into_table(db_name, table_name, values)
+        if result:
+            return f"Row inserted into table '{table_name}' successfully"
+        else:
+            return f"Failed to insert into table '{table_name}'"
 
-    # Enhanced SELECT query support
+    # JOIN support
     elif match := re.match(
-        r"SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+(?:INNER|LEFT|RIGHT|FULL)?\s*JOIN\s+(\w+)\s+ON\s+(.+?))?(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(.+?))?(?:\s+LIMIT\s+(\d+))?(?:\s+OFFSET\s+(\d+))?$", 
-        command, re.IGNORECASE
+        r"SELECT\s+(.+?)\s+FROM\s+(\w+)\s+(INNER|LEFT)\s+JOIN\s+(\w+)\s+ON\s+(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(.+?))?(?:\s+LIMIT\s+(\d+))?(?:\s+OFFSET\s+(\d+))?\s*;?$",
+        command, re.IGNORECASE | re.DOTALL
     ):
-        if not current_db or not active_user or not user_has_access_to_db(active_user["username"], current_db):
-            print("Access denied: You do not own or have access to this database.")
-            return False
-        
+        if not db_name or not active_user or not user_has_access_to_db(active_user["username"], db_name):
+            return "Access denied: You do not own or have access to this database."
         select_columns = [col.strip() for col in match.group(1).split(",")]
         left_table = match.group(2)
-        right_table = match.group(3)
-        join_condition = match.group(4)
-        where_clause = match.group(5)
-        order_by = match.group(6)
-        limit = int(match.group(7)) if match.group(7) else None
-        offset = int(match.group(8)) if match.group(8) else 0
-        
-        # Determine join type
-        join_type = "INNER"
-        if "LEFT JOIN" in command.upper():
-            join_type = "LEFT"
-        elif "RIGHT JOIN" in command.upper():
-            join_type = "RIGHT"
-        elif "FULL JOIN" in command.upper():
-            join_type = "FULL"
-        
-        if right_table:  # This is a JOIN query
-            # Parse join condition
-            join_parts = join_condition.split("=")
-            left_col = join_parts[0].strip().split(".")[1]
-            right_col = join_parts[1].strip().split(".")[1]
-            
-            # Parse WHERE clause if present
-            where_func = None
-            if where_clause:
-                where_func = parse_where_clause(where_clause, select_columns)
-            
-            # Parse ORDER BY clause if present
-            order_by_func = None
-            if order_by:
-                order_by_func = parse_order_by_clause(order_by, select_columns)
-            
-            results = join_tables(
-                current_db,
-                left_table,
-                right_table,
-                left_col,
-                right_col,
-                select_columns,
-                where_func,
-                order_by_func,
-                limit,
-                offset,
-                join_type
-            )
-        else:  # This is a simple SELECT query
-            # Get all columns from the table for WHERE and ORDER BY
-            db = Database(current_db)
-            if left_table not in db.tables:
-                print(f"Error: Table '{left_table}' does not exist.")
-                return False
-            
-            table = db.tables[left_table]
-            all_columns = [col.name for col in table.columns]
-            
-            # Handle SELECT *
-            if select_columns == ["*"]:
-                select_columns = all_columns
-            
-            # Parse WHERE clause if present
-            where_func = None
-            if where_clause:
-                where_func = parse_where_clause(where_clause, all_columns)
-            
-            # Parse ORDER BY clause if present
-            order_by_func = None
-            if order_by:
-                order_by_func = parse_order_by_clause(order_by, all_columns)
-            
-            results = select_from_table(
-                current_db, 
-                left_table, 
-                select_columns, 
-                where_func, 
-                order_by_func,
-                limit,
-                offset
-            )
-        
-        print_results(results, select_columns)
+        join_type = match.group(3).upper()
+        right_table = match.group(4)
+        left_table_alias = match.group(5)
+        left_col = match.group(6)
+        right_table_alias = match.group(7)
+        right_col = match.group(8)
+        where_clause = match.group(9)
+        order_by = match.group(10)
+        limit = int(match.group(11)) if match.group(11) else None
+        offset = int(match.group(12)) if match.group(12) else 0
+        # Parse WHERE clause if present
+        where_func = None
+        db = Database(db_name)
+        all_columns = [col.name for col in db.tables[left_table].columns] + [col.name for col in db.tables[right_table].columns]
+        if where_clause:
+            where_func = parse_where_clause(where_clause, all_columns)
+        # Parse ORDER BY clause if present
+        order_by_func = None
+        if order_by:
+            order_by_func = parse_order_by_clause(order_by, all_columns)
+        results = join_tables(
+            db_name,
+            left_table,
+            right_table,
+            left_col,
+            right_col,
+            select_columns,
+            where_func,
+            order_by_func,
+            limit,
+            offset,
+            join_type
+        )
+        return {"results": results, "columns": select_columns}
 
-    # Simple SELECT query support (for basic SELECT * FROM table)
-    elif match := re.match(r"SELECT\s+\*\s+FROM\s+(\w+)", command, re.IGNORECASE):
-        if not current_db or not active_user or not user_has_access_to_db(active_user["username"], current_db):
-            print("Access denied: You do not own or have access to this database.")
-            return
-        
-        table_name = match.group(1)
-        print(f"Table name: {table_name}")  # Debug print
-        
-        # Get all columns from the table
-        db = Database(current_db)
-        if table_name not in db.tables:
-            print(f"Error: Table '{table_name}' does not exist.")
-            return
-        
-        table = db.tables[table_name]
-        all_columns = [col.name for col in table.columns]
-        print(f"Columns: {all_columns}")  # Debug print
-        
-        try:
-            results = select_from_table(
-                current_db,
-                table_name,
-                all_columns,
-                None,  # No WHERE clause
-                None,  # No ORDER BY
-                None,  # No LIMIT
-                0      # No OFFSET
-            )
-            print(f"Got results: {results}")  # Debug print
-            print_results(results, all_columns)
-        except Exception as e:
-            print(f"Error executing SELECT: {str(e)}")  # Debug print
-
+    # UPDATE ... SET ... [WHERE ...] [RETURNING ...]
     elif match := re.match(
-        r"UPDATE\s+(\w+)\s+SET\s+(.+?)(?:\s+WHERE\s+(.+?))?(?:\s+RETURNING\s+(.+))?$", 
-        command, re.IGNORECASE
+        r"UPDATE\s+(\w+)\s+SET\s+(.+?)(?:\s+WHERE\s+(.+?))?(?:\s+RETURNING\s+(.+?))?\s*;?$",
+        command, re.IGNORECASE | re.DOTALL
     ):
-        if not current_db or not active_user or not user_has_access_to_db(active_user["username"], current_db):
-            print("Access denied: You do not own or have access to this database.")
-            return
-        
+        if not db_name or not active_user or not user_has_access_to_db(active_user["username"], db_name):
+            return "Access denied: You do not own or have access to this database."
         table_name = match.group(1)
         set_clause = match.group(2)
         where_clause = match.group(3)
         returning_clause = match.group(4)
-        
-        # Initialize transaction manager if needed
-        if transaction_manager is None:
-            transaction_manager = TransactionManager(current_db)
-        
-        # Acquire lock if in transaction
-        if current_transaction:
-            if not transaction_manager.acquire_lock(current_transaction, f"{table_name}", "EXCLUSIVE"):
-                print("Error: Could not acquire lock for table.")
-                return
-        
-        try:
-            # Parse SET clause
-            set_values = {}
-            for set_item in set_clause.split(","):
-                col_name, value = set_item.split("=")
-                col_name = col_name.strip()
-                value = value.strip().strip("'\"")
-                set_values[col_name] = value
-            
-            # Parse WHERE clause if present
-            where_func = None
-            if where_clause:
-                # Get all columns from the table for WHERE clause
-                db = Database(current_db)
-                if table_name not in db.tables:
-                    print(f"Error: Table '{table_name}' does not exist.")
-                    return
-                
-                table = db.tables[table_name]
-                all_columns = [col.name for col in table.columns]
-                where_func = parse_where_clause(where_clause, all_columns)
-            
-            # Parse RETURNING clause if present
-            returning_columns = None
-            if returning_clause:
-                returning_columns = [col.strip() for col in returning_clause.split(",")]
-            
-            # Store old values for rollback if in transaction
-            if current_transaction:
-                old_values = select_from_table(current_db, table_name, None, where_func)
-                transaction_manager.transactions[current_transaction].changes[table_name] = {
-                    "type": "UPDATE",
-                    "old_values": old_values,
-                    "new_values": set_values
-                }
-            
-            results = update_table(
-                current_db,
-                table_name,
-                set_values,
-                where_func,
-                returning_columns
-            )
-            
-            if returning_columns and results:
-                print_results(results, returning_columns)
-        finally:
-            # Release lock if in transaction
-            if current_transaction:
-                transaction_manager.release_lock(current_transaction, f"{table_name}")
+        # Parse SET clause
+        set_values = {}
+        for set_item in set_clause.split(","):
+            col_name, value = set_item.split("=")
+            col_name = col_name.strip()
+            value = value.strip().strip("'\"")
+            set_values[col_name] = value
+        # Parse WHERE clause if present
+        where_func = None
+        db = Database(db_name)
+        if where_clause:
+            all_columns = [col.name for col in db.tables[table_name].columns]
+            where_func = parse_where_clause(where_clause, all_columns)
+        # Parse RETURNING clause if present
+        returning_columns = None
+        if returning_clause:
+            returning_columns = [col.strip() for col in returning_clause.split(",")]
+        results = update_table(
+            db_name,
+            table_name,
+            set_values,
+            where_func,
+            returning_columns
+        )
+        if returning_columns and results:
+            return {"results": results, "columns": returning_columns}
+        return f"Table '{table_name}' updated successfully"
 
+    # DELETE FROM ... [WHERE ...] [RETURNING ...]
     elif match := re.match(
-        r"DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+RETURNING\s+(.+))?$", 
-        command, re.IGNORECASE
+        r"DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+RETURNING\s+(.+?))?\s*;?$",
+        command, re.IGNORECASE | re.DOTALL
     ):
-        if not current_db or not active_user or not user_has_access_to_db(active_user["username"], current_db):
-            print("Access denied: You do not own or have access to this database.")
-            return
-        
+        if not db_name or not active_user or not user_has_access_to_db(active_user["username"], db_name):
+            return "Access denied: You do not own or have access to this database."
         table_name = match.group(1)
         where_clause = match.group(2)
         returning_clause = match.group(3)
-        
-        # Initialize transaction manager if needed
-        if transaction_manager is None:
-            transaction_manager = TransactionManager(current_db)
-        
-        # Acquire lock if in transaction
-        if current_transaction:
-            if not transaction_manager.acquire_lock(current_transaction, f"{table_name}", "EXCLUSIVE"):
-                print("Error: Could not acquire lock for table.")
-                return
-        
-        try:
-            # Parse WHERE clause if present
-            where_func = None
-            if where_clause:
-                # Get all columns from the table for WHERE clause
-                db = Database(current_db)
-                if table_name not in db.tables:
-                    print(f"Error: Table '{table_name}' does not exist.")
-                    return
-                
-                table = db.tables[table_name]
-                all_columns = [col.name for col in table.columns]
-                where_func = parse_where_clause(where_clause, all_columns)
-            
-            # Parse RETURNING clause if present
-            returning_columns = None
-            if returning_clause:
-                returning_columns = [col.strip() for col in returning_clause.split(",")]
-            
-            # Store deleted rows for rollback if in transaction
-            if current_transaction:
-                deleted_rows = select_from_table(current_db, table_name, None, where_func)
-                transaction_manager.transactions[current_transaction].changes[table_name] = {
-                    "type": "DELETE",
-                    "rows": deleted_rows
-                }
-            
-            results = delete_from_table(
-                current_db,
-                table_name,
-                where_func,
-                returning_columns
-            )
-            
-            if returning_columns and results:
-                print_results(results, returning_columns)
-        finally:
-            # Release lock if in transaction
-            if current_transaction:
-                transaction_manager.release_lock(current_transaction, f"{table_name}")
+        # Parse WHERE clause if present
+        where_func = None
+        db = Database(db_name)
+        if where_clause:
+            all_columns = [col.name for col in db.tables[table_name].columns]
+            where_func = parse_where_clause(where_clause, all_columns)
+        # Parse RETURNING clause if present
+        returning_columns = None
+        if returning_clause:
+            returning_columns = [col.strip() for col in returning_clause.split(",")]
+        results = delete_from_table(
+            db_name,
+            table_name,
+            where_func,
+            returning_columns
+        )
+        if returning_columns and results:
+            return {"results": results, "columns": returning_columns}
+        return f"Rows deleted from table '{table_name}' successfully"
+
+    # Advanced SELECT with WHERE, ORDER BY, LIMIT, OFFSET
+    elif match := re.match(
+        r"SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(.+?))?(?:\s+LIMIT\s+(\d+))?(?:\s+OFFSET\s+(\d+))?\s*;?$",
+        command, re.IGNORECASE | re.DOTALL
+    ):
+        if not db_name or not active_user or not user_has_access_to_db(active_user["username"], db_name):
+            return "Access denied: You do not own or have access to this database."
+        select_columns = [col.strip() for col in match.group(1).split(",")]
+        table_name = match.group(2)
+        where_clause = match.group(3)
+        order_by = match.group(4)
+        limit = int(match.group(5)) if match.group(5) else None
+        offset = int(match.group(6)) if match.group(6) else 0
+        # Parse WHERE clause if present
+        where_func = None
+        db = Database(db_name)
+        all_columns = [col.name for col in db.tables[table_name].columns]
+        if where_clause:
+            where_func = parse_where_clause(where_clause, all_columns)
+        # Parse ORDER BY clause if present
+        order_by_func = None
+        if order_by:
+            order_by_func = parse_order_by_clause(order_by, all_columns)
+        results = select_from_table(
+            db_name,
+            table_name,
+            select_columns,
+            where_func,
+            order_by_func,
+            limit,
+            offset
+        )
+        return {"results": results, "columns": select_columns}
 
     elif command.upper() == "HELP":
-        print_help()
+        return show_help()
 
     else:
-        print("Invalid command. Type 'HELP' for available commands.")
+        return "Invalid command. Type 'HELP' for available commands."
 
 def parse_where_clause(where_clause, columns):
     """Parse WHERE clause into a function that can be used to filter rows."""

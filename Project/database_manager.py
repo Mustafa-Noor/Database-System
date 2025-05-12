@@ -10,8 +10,8 @@ project_dir = os.path.dirname(os.path.abspath(__file__))
 if project_dir not in sys.path:
     sys.path.append(project_dir)
 
-# Import user_manager at module level to avoid circular imports
-from user_manager import record_database_owner
+# Remove the circular import
+# from user_manager import record_database_owner
 
 # Change BASE_DIR to be inside the project folder
 BASE_DIR = os.path.join(os.path.dirname(__file__), "databases")
@@ -126,30 +126,51 @@ class Database:
             json.dump(metadata, f, indent=4)
 
 def create_database(db_name, owner=None):
-    """Create a new database. Optionally record the owner."""
-    if os.path.exists(os.path.join(BASE_DIR, db_name)):
-        print(f"Error: Database '{db_name}' already exists.")
-        return False
+    """Create a new database"""
+    try:
+        # Check if database already exists
+        if os.path.exists(os.path.join(BASE_DIR, db_name)):
+            print(f"Database '{db_name}' already exists")
+            return False
 
-    os.makedirs(os.path.join(BASE_DIR, db_name), exist_ok=True)  # Ensure the directory exists
-    
-    db = Database(db_name)
-    db.save_metadata()
-    print(f"Database '{db_name}' created successfully.")
-    
-    if owner:
-        print(f"Recording ownership: {db_name} owned by {owner}")
-        try:
-            # Lazy import to avoid circular dependency
-            import importlib
-            user_manager = importlib.import_module('user_manager')
-            result = user_manager.record_database_owner(db_name, owner)
-            print(f"Database ownership recorded: {result}")
-        except Exception as e:
-            print(f"Warning: Could not record database owner: {str(e)}")
-            import traceback
-            traceback.print_exc()
-    return True
+        # Create database directory
+        db_path = os.path.join(BASE_DIR, db_name)
+        os.makedirs(db_path)
+        print(f"Created database directory: {db_path}")
+
+        # Create metadata file
+        metadata = {
+            'name': db_name,
+            'owner': owner,
+            'created_at': datetime.now().isoformat(),
+            'tables': {}
+        }
+        
+        metadata_path = os.path.join(db_path, 'metadata.json')
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        print(f"Created metadata file: {metadata_path}")
+
+        # Verify ownership was recorded
+        if owner:
+            with open(metadata_path, 'r') as f:
+                stored_metadata = json.load(f)
+                if stored_metadata.get('owner') != owner:
+                    print(f"Error: Failed to record ownership for database '{db_name}'")
+                    # Clean up if ownership recording failed
+                    import shutil
+                    shutil.rmtree(db_path)
+                    return False
+                print(f"Verified ownership for database '{db_name}'")
+
+        return True
+    except Exception as e:
+        print(f"Error creating database: {str(e)}")
+        # Clean up if creation failed
+        if os.path.exists(db_path):
+            import shutil
+            shutil.rmtree(db_path)
+        return False
 
 def drop_database(db_name):
     """Delete a database."""

@@ -1,0 +1,80 @@
+{
+    "tables": {
+        "users": {
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "INT",
+                    "is_primary": true,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "name",
+                    "type": "TEXT",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "email",
+                    "type": "TEXT",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": true
+                },
+                {
+                    "name": "age",
+                    "type": "INT",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": "18",
+                    "is_unique": false
+                }
+            ],
+            "primary_key": "id",
+            "foreign_keys": []
+        },
+        "orders": {
+            "columns": [
+                {
+                    "name": "order_id",
+                    "type": "INT",
+                    "is_primary": true,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "user_id",
+                    "type": "INT",
+                    "is_primary": false,
+                    "is_nullable": true,
+                    "default": null,
+                    "is_unique": false
+                },
+                {
+                    "name": "amount",
+                    "type": "FLOAT",
+                    "is_primary": false,
+                    "is_nullable": false,
+                    "default": null,
+                    "is_unique": false
+                }
+            ],
+            "primary_key": "order_id",
+            "foreign_keys": [
+                {
+                    "column": "user_id",
+                    "ref_table": "users",
+                    "ref_column": "id",
+                    "on_delete": "RESTRICT",
+                    "on_update": "RESTRICT"
+                }
+            ]
+        }
+    }
+}
